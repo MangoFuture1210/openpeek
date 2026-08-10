@@ -70,6 +70,33 @@ test("serializeWorkbenchSession keeps an explicit empty tab set", () => {
   );
 });
 
+test("workbench sessions preserve an active blank tab across restarts", () => {
+  assert.deepEqual(
+    serializeWorkbenchSession({
+      tabs: [
+        { id: "tab-file", path: "README.md" },
+        {
+          id: "tab-blank",
+          path: "",
+          blank: true,
+          history: { entries: [], index: -1 },
+        },
+      ],
+      activeTabId: "tab-blank",
+      activeTabPath: "",
+    }),
+    {
+      tabs: [
+        { id: "tab-file", path: "README.md" },
+        { id: "tab-blank", path: "", blank: true },
+      ],
+      activeTabId: "tab-blank",
+      activeTabPath: "",
+      treeScrollTop: 0,
+    },
+  );
+});
+
 test("workbenchSessionForRepo returns a normalized repo session", () => {
   const sessions = normalizeWorkbenchSessions({
     "content-repo": {

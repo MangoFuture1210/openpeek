@@ -74,3 +74,26 @@ test("startup renders restored document tabs before opening their active documen
   assert.equal(calls[0].tabState.activeTabId, "tab-readme");
   assert.deepEqual(calls[0].options, { render: true });
 });
+
+test("startup can restore an active blank tab without inventing a file", () => {
+  const calls = [];
+  restoreDocumentTabsForStartup({
+    session: {
+      tabs: [
+        { id: "tab-readme", path: "README.md" },
+        { id: "tab-blank", path: "", blank: true },
+      ],
+      activeTabId: "tab-blank",
+      activeTabPath: "",
+    },
+    normalizeTabs: normalizeDocumentTabs,
+    resolveActiveTabId: resolveActiveDocumentTabId,
+    applyTabState(tabState, options) {
+      calls.push({ tabState, options });
+    },
+  });
+
+  assert.equal(calls[0].tabState.activeTabId, "tab-blank");
+  assert.equal(calls[0].tabState.tabs[1].blank, true);
+  assert.equal(calls[0].tabState.tabs[1].path, "");
+});

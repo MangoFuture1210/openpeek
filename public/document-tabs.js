@@ -60,6 +60,14 @@ export function normalizeDocumentTabs(tabs = []) {
   const normalized = [];
   for (const rawTab of tabs) {
     const fallbackPath = normalizePath(rawTab?.path);
+    const blank = rawTab?.blank === true && !fallbackPath;
+    if (blank) {
+      const requestedId = normalizeTabId(rawTab?.id);
+      const id = requestedId && !usedIds.has(requestedId) ? requestedId : nextId();
+      usedIds.add(id);
+      normalized.push(createBlankTab(id));
+      continue;
+    }
     const history = normalizeHistory(rawTab?.history, fallbackPath);
     if (!history) {
       continue;
@@ -82,7 +90,9 @@ export function resolveActiveDocumentTabId({ tabs = [], activeTabId = "", active
   }
 
   const requestedPath = normalizePath(activePath);
-  return normalized.find((tab) => tab.path === requestedPath)?.id || normalized[0]?.id || "";
+  return (requestedPath ? normalized.find((tab) => tab.path === requestedPath)?.id : "")
+    || normalized[0]?.id
+    || "";
 }
 
 export function activeDocumentTab({ tabs = [], activeTabId = "" } = {}) {
@@ -97,7 +107,16 @@ export function activeDocumentPath({ tabs = [], activeTabId = "" } = {}) {
 
 export function activeDocumentLocation({ tabs = [], activeTabId = "" } = {}) {
   const tab = activeDocumentTab({ tabs, activeTabId });
-  return tab ? { ...tab.history.entries[tab.history.index] } : null;
+  if (!tab || tab.blank) {
+    return null;
+  }
+  return { ...tab.history.entries[tab.history.index] };
+}
+
+export function createBlankDocumentTab({ tabs = [] } = {}) {
+  const normalized = normalizeDocumentTabs(tabs);
+  const blankTab = createBlankTab(nextDocumentTabId(normalized));
+  return navigationResult([...normalized, blankTab], blankTab.id, blankTab.id);
 }
 
 export function navigateDocumentTab({
@@ -126,6 +145,15 @@ export function navigateDocumentTab({
   }
 
   const activeTab = normalized[activeIndex];
+  if (activeTab.blank) {
+    const nextTab = {
+      id: activeTab.id,
+      path: target.path,
+      history: { entries: [target], index: 0 },
+    };
+    const nextTabs = normalized.map((tab, index) => index === activeIndex ? nextTab : tab);
+    return navigationResult(nextTabs, activeId);
+  }
   const current = activeTab.history.entries[activeTab.history.index];
   if (sameAddress(current, target)) {
     return navigationResult(normalized, activeId);
@@ -163,6 +191,9 @@ export function moveDocumentTabHistory({ tabs = [], activeTabId = "", direction 
   }
 
   const activeTab = normalized[activeIndex];
+  if (activeTab.blank) {
+    return navigationResult(normalized, activeId);
+  }
   const historyIndex = Math.max(0, Math.min(
     activeTab.history.entries.length - 1,
     activeTab.history.index + step,
@@ -183,7 +214,7 @@ export function moveDocumentTabHistory({ tabs = [], activeTabId = "", direction 
 
 export function documentTabHistoryAvailability({ tabs = [], activeTabId = "" } = {}) {
   const activeTab = activeDocumentTab({ tabs, activeTabId });
-  if (!activeTab) {
+  if (!activeTab || activeTab.blank) {
     return { canGoBack: false, canGoForward: false };
   }
   return {
@@ -201,6 +232,9 @@ export function updateActiveDocumentTabLocation({ tabs = [], activeTabId = "", l
   }
 
   const activeTab = normalized[activeIndex];
+  if (activeTab.blank) {
+    return navigationResult(normalized, activeId);
+  }
   const current = activeTab.history.entries[activeTab.history.index];
   const nextLocation = normalizeLocation({
     path: location.path ?? current.path,
@@ -289,6 +323,9 @@ export function replaceDocumentTabPath({ tabs = [], fromPath, toPath } = {}) {
   }
 
   return normalized.map((tab) => {
+    if (tab.blank) {
+      return tab;
+    }
     const entries = tab.history.entries.map((entry) => entry.path === from ? { ...entry, path: to } : entry);
     const current = entries[tab.history.index];
     return {
@@ -314,6 +351,10 @@ export function removeDocumentTabPath({
   const activeIndex = normalized.findIndex((tab) => tab.id === activeId);
   const nextTabs = [];
   for (const tab of normalized) {
+    if (tab.blank) {
+      nextTabs.push(tab);
+      continue;
+    }
     const entries = tab.history.entries.filter((entry) => entry.path !== targetPath);
     if (entries.length === 0) {
       continue;
@@ -360,6 +401,15 @@ function createDocumentTab(tabs, location) {
     id,
     path: location.path,
     history: { entries: [location], index: 0 },
+  };
+}
+
+function createBlankTab(id) {
+  return {
+    id,
+    path: "",
+    blank: true,
+    history: { entries: [], index: -1 },
   };
 }
 

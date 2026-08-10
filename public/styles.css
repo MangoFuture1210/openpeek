@@ -332,8 +332,7 @@ input {
 }
 
 .document-tab-strip {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -342,6 +341,7 @@ input {
 
 .document-tabs {
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -352,6 +352,7 @@ input {
   -webkit-app-region: no-drag;
 }
 
+.document-tab-new,
 .document-new {
   display: inline-grid;
   place-items: center;
@@ -368,9 +369,18 @@ input {
   padding: 0;
 }
 
+.document-tab-new:hover,
 .document-new:hover {
   background: var(--row-hover);
   color: var(--text);
+}
+
+.document-tab-new {
+  flex: 0 0 28px;
+}
+
+.document-new {
+  margin-left: auto;
 }
 
 .document-new:disabled {

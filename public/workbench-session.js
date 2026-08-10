@@ -108,6 +108,24 @@ function normalizeSessionTabs(value) {
   for (const item of value) {
     const path = safeRelativePath(typeof item === "string" ? item : item?.path);
     const id = normalizeTabId(typeof item === "string" ? "" : item?.id);
+    const blank = typeof item === "object" && item?.blank === true && !path;
+    if (blank) {
+      if (id && seenIds.has(id)) {
+        continue;
+      }
+      if (id) {
+        seenIds.add(id);
+      }
+      tabs.push({
+        ...(id ? { id } : {}),
+        path: "",
+        blank: true,
+      });
+      if (tabs.length >= MAX_SESSION_TABS) {
+        break;
+      }
+      continue;
+    }
     if (!path || (id ? seenIds.has(id) : seenLegacyPaths.has(path))) {
       continue;
     }
@@ -142,7 +160,8 @@ function activeSessionPath({ tabs, activeTabId, activeTabPath }) {
     return "";
   }
   if (activeTabId) {
-    return tabs.find((tab) => tab.id === activeTabId)?.path || tabs[0].path;
+    const activeTab = tabs.find((tab) => tab.id === activeTabId);
+    return activeTab ? activeTab.path : tabs[0].path;
   }
   return tabs.some((tab) => tab.path === activeTabPath) ? activeTabPath : tabs[0].path;
 }

@@ -7,6 +7,7 @@ import {
   closeDocumentTab,
   closeDocumentTabsToRight,
   closeOtherDocumentTabs,
+  createBlankDocumentTab,
   documentTabBehaviorFromModifiers,
   documentTabHistoryAvailability,
   isTreeDocumentNewTabShortcut,
@@ -35,6 +36,73 @@ function location(path, { hash = "", scrollTop = 0 } = {}) {
 
 test("tabTitleFromPath shows the file name", () => {
   assert.equal(tabTitleFromPath("docs/guides/github-apps-management.md"), "github-apps-management.md");
+});
+
+test("a new blank tab is active without pretending to be a repository file", () => {
+  const result = createBlankDocumentTab({
+    tabs: [tab("tab-1", "README.md")],
+  });
+
+  assert.equal(result.tabs.length, 2);
+  assert.deepEqual(result.tabs[1], {
+    id: "tab-2",
+    path: "",
+    blank: true,
+    history: { entries: [], index: -1 },
+  });
+  assert.equal(result.activeTabId, "tab-2");
+  assert.equal(result.openedTabId, "tab-2");
+  assert.equal(result.location, null);
+  assert.deepEqual(documentTabHistoryAvailability(result), {
+    canGoBack: false,
+    canGoForward: false,
+  });
+});
+
+test("current navigation fills the active blank tab instead of adding another tab", () => {
+  const blank = createBlankDocumentTab({
+    tabs: [tab("tab-1", "README.md")],
+  });
+  const result = navigateDocumentTab({
+    tabs: blank.tabs,
+    activeTabId: blank.activeTabId,
+    location: location("docs/guide.md", { hash: "#usage" }),
+  });
+
+  assert.equal(result.tabs.length, 2);
+  assert.equal(result.activeTabId, "tab-2");
+  assert.deepEqual(result.tabs[1], {
+    id: "tab-2",
+    path: "docs/guide.md",
+    history: {
+      entries: [location("docs/guide.md", { hash: "#usage" })],
+      index: 0,
+    },
+  });
+});
+
+test("blank tabs normalize, reorder, and survive unrelated path deletion", () => {
+  const tabs = normalizeDocumentTabs([
+    { id: "tab-blank", path: "", blank: true },
+    { id: "tab-file", path: "README.md" },
+    { id: "invalid-empty", path: "" },
+  ]);
+  assert.deepEqual(tabs.map((item) => item.id), ["tab-blank", "tab-file"]);
+
+  const reordered = reorderDocumentTabs({
+    tabs,
+    sourceTabId: "tab-file",
+    targetTabId: "tab-blank",
+    placement: "before",
+  });
+  const result = removeDocumentTabPath({
+    tabs: reordered,
+    activeTabId: "tab-blank",
+    filePath: "README.md",
+  });
+  assert.deepEqual(result.tabs.map((item) => item.id), ["tab-blank"]);
+  assert.equal(result.activeTabId, "tab-blank");
+  assert.equal(result.location, null);
 });
 
 test("internal-link modifiers select current, background, and foreground tab intents", () => {
@@ -229,6 +297,21 @@ test("close and reorder use stable tab IDs, even when document paths repeat", ()
   });
   assert.equal(closed.activeTabId, "tab-2");
   assert.deepEqual(closed.tabs.map((item) => item.id), ["tab-3", "tab-2"]);
+});
+
+test("closing an active document can hand focus to an adjacent blank tab", () => {
+  const result = closeDocumentTab({
+    tabs: [
+      tab("tab-1", "README.md"),
+      { id: "tab-2", path: "", blank: true },
+    ],
+    activeTabId: "tab-1",
+    targetTabId: "tab-1",
+  });
+
+  assert.equal(result.activeTabId, "tab-2");
+  assert.equal(result.tabs[0].blank, true);
+  assert.equal(result.location, null);
 });
 
 test("close other and close right retain the correct active tab identity", () => {
