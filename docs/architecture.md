@@ -557,9 +557,9 @@ snapshot, passes explicit isolated `userData` and `sessionData`, verifies the pr
 fingerprint after the run, and deletes only the temporary snapshot. Failure to create or verify the
 snapshot must stop automation; it may not fall back to the real Profile.
 
-Seven preferences are user configurable: `language`, `colorMode`, `documentFont`, `documentFontSize`,
-`fileTreeMode`, `showDocumentTitles`, and `gitRemoteCheckIntervalMinutes`. Tabs, tree expansion, scroll,
-focus, sidebar state, outline state, and split ratios are restored workbench state, not settings.
+Eight preferences are user configurable: `language`, `colorMode`, `documentFont`, `documentFontSize`,
+`fileTreeMode`, `showDocumentTitles`, `gitRemoteCheckIntervalMinutes`, and `keyboardShortcuts`. Tabs, tree
+expansion, scroll, focus, sidebar state, outline state, and split ratios are restored workbench state, not settings.
 Frontmatter rules are repository-owned data. Version and environment information are read-only status.
 
 Preference propagation is directional:
@@ -569,6 +569,7 @@ Preference propagation is directional:
 - Settings or Desktop Home may broadcast a persisted normalized result to the workbench;
 - color, font, and size changes must not rebuild the file tree;
 - a real `fileTreeMode` or `showDocumentTitles` change may rebuild it once;
+- a keyboard-shortcut change refreshes renderer bindings and rebuilds native menu accelerators;
 - a language change flushes editing and workbench state before a safe reload;
 - restoring focus or viewport after rendering must not save unchanged state again.
 

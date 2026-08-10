@@ -7,6 +7,7 @@ import {
   pastedImageInsertionText,
   imageLineAttributes,
   imageLineForAction,
+  keyboardTextStyleFromEvent,
   pastedTextLinkCandidate,
   closestElement,
   liveClassForLine,
@@ -25,6 +26,7 @@ import {
   liveMdxComponentForLine,
   liveMdxTargetIsEmbeddedViewControl,
   minimalDocumentChange,
+  liveMarkdownSelectionPresentation,
   nextLiveEditingSuppression,
   listItemIndentChange,
   SLASH_COMMANDS,
@@ -33,6 +35,41 @@ import {
   slashCommandsForLocale,
   slashCommandTemplate,
 } from "../src/client/source-editor.mjs";
+
+test("Live text formatting shortcuts use defaults and user overrides", () => {
+  assert.equal(
+    keyboardTextStyleFromEvent(
+      { code: "KeyB", metaKey: true },
+      {},
+      { platform: "darwin" },
+    ),
+    "bold",
+  );
+  assert.equal(
+    keyboardTextStyleFromEvent(
+      { code: "KeyU", metaKey: true },
+      {},
+      { platform: "darwin" },
+    ),
+    "underline",
+  );
+  assert.equal(
+    keyboardTextStyleFromEvent(
+      { code: "KeyB", metaKey: true },
+      { "editor.bold": "Mod+Alt+B" },
+      { platform: "darwin" },
+    ),
+    null,
+  );
+  assert.equal(
+    keyboardTextStyleFromEvent(
+      { code: "KeyB", metaKey: true, altKey: true },
+      { "editor.bold": "Mod+Alt+B" },
+      { platform: "darwin" },
+    ),
+    "bold",
+  );
+});
 
 test("minimalDocumentChange preserves unchanged editor ranges around a remote update", () => {
   const current = "local first\nmiddle\nlast\n";
@@ -301,6 +338,46 @@ test("liveVisualRangesForLine keeps inline Markdown markers visible in the activ
     )),
   );
   assert.equal(ranges.some((range) => range.type === "replace"), false);
+});
+
+test("Live text dragging keeps reading decorations stable until the selection collapses", () => {
+  const cursor = EditorState.create({
+    doc: "第一段\n第二段",
+    selection: { anchor: 1 },
+  });
+  const dragging = cursor.update({
+    selection: { anchor: 1, head: 7 },
+  }).state;
+
+  assert.equal(liveMarkdownSelectionPresentation(cursor), 1);
+  assert.equal(liveMarkdownSelectionPresentation(dragging), null);
+  assert.equal(liveMarkdownSelectionPresentation(dragging, true), null);
+});
+
+test("Live reading decorations render reusable text styles without exposing span source", () => {
+  const source =
+    '<span style="color: #dc2626; background-color: #d9770633;">**_重点_**</span> 和 ~~删除~~';
+  const ranges = liveVisualRangesForLine(source, { isActiveLine: false });
+
+  assert.ok(ranges.some((range) => (
+    range.type === "mark" &&
+    range.className === "cm-live-controlled-style" &&
+    range.attributes?.style ===
+      "color: #dc2626; background-color: #d9770633"
+  )));
+  assert.ok(ranges.some((range) => (
+    range.type === "mark" && range.className === "cm-live-emphasis"
+  )));
+  assert.ok(ranges.some((range) => (
+    range.type === "mark" && range.className === "cm-live-strikethrough"
+  )));
+  assert.equal(
+    ranges.some((range) => (
+      range.type === "mark" &&
+      String(range.className ?? "").includes("cm-live-marker")
+    )),
+    false,
+  );
 });
 
 test("Live typing keeps the active list item in source editing state", () => {

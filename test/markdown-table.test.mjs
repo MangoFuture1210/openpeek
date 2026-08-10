@@ -130,6 +130,7 @@ test("table cell formats combine standard Markdown with controlled colors", () =
   const formatted = formatMarkdownTableCellContent("健康", {
     bold: true,
     italic: true,
+    underline: true,
     strikethrough: true,
     color: "#16A34A",
     backgroundColor: "#16A34A33",
@@ -137,12 +138,13 @@ test("table cell formats combine standard Markdown with controlled colors", () =
 
   assert.equal(
     formatted,
-    '**_~~<span style="color: #16a34a; background-color: #16a34a33;">健康</span>~~_**',
+    '**_~~<span style="color: #16a34a; background-color: #16a34a33; text-decoration: underline;">健康</span>~~_**',
   );
   assert.deepEqual(parseMarkdownTableCellFormat(formatted), {
     content: "健康",
     bold: true,
     italic: true,
+    underline: true,
     strikethrough: true,
     color: "#16a34a",
     backgroundColor: "#16a34a33",
@@ -161,6 +163,7 @@ test("controlled table style spans reject arbitrary or duplicate declarations", 
     {
       color: "#2563eb",
       backgroundColor: "#dc262633",
+      underline: false,
       content: "风险",
       length: 68,
       source:
@@ -240,9 +243,19 @@ test("table text styles and highlights apply to a rectangular selection", () => 
     bold?.source ?? "",
     /\*\*<span style="background-color: #d9770633;">风险<\/span>\*\*/,
   );
-  assert.equal(
-    applyMarkdownTableTextStyle(tableSource, selected, "underline", true),
-    null,
+  const underlined = applyMarkdownTableTextStyle(
+    tableSource,
+    selected,
+    "underline",
+    true,
+  );
+  assert.match(
+    underlined?.source ?? "",
+    /\| 自然流量 \| <span style="text-decoration: underline;">128\.4（↑ 12\.4%）<\/span> \| <span style="text-decoration: underline;">健康<\/span> \|/,
+  );
+  assert.match(
+    underlined?.source ?? "",
+    /\| 付费投放 \| <span style="text-decoration: underline;">96\.7（↓ 8\.7%）<\/span> \| <span style="text-decoration: underline;">风险<\/span> \|/,
   );
 });
 
@@ -269,6 +282,7 @@ test("table selection format state reports uniform and mixed values", () => {
     {
       bold: false,
       italic: false,
+      underline: false,
       strikethrough: false,
       color: "mixed",
       backgroundColor: null,

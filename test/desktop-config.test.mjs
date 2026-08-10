@@ -39,6 +39,7 @@ const NEW_INSTALL_PREFERENCES = {
   fileTreeMode: "content",
   showDocumentTitles: true,
   gitRemoteCheckIntervalMinutes: 10,
+  keyboardShortcuts: {},
 };
 
 const LEGACY_PREFERENCES = {
@@ -49,6 +50,7 @@ const LEGACY_PREFERENCES = {
   fileTreeMode: "all",
   showDocumentTitles: true,
   gitRemoteCheckIntervalMinutes: 10,
+  keyboardShortcuts: {},
 };
 
 const LEGACY_PENDING_PREFERENCES = {
@@ -335,6 +337,7 @@ test("readDesktopConfig normalizes an invalid document font size", async () => {
       fileTreeMode: "content",
       showDocumentTitles: true,
       gitRemoteCheckIntervalMinutes: 10,
+      keyboardShortcuts: {},
     },
   });
 });
@@ -554,6 +557,9 @@ test("saveDesktopPreferences persists normalized app preferences across reposito
       fileTreeMode: "content",
       showDocumentTitles: false,
       gitRemoteCheckIntervalMinutes: 60,
+      keyboardShortcuts: {
+        "editor.bold": "Mod+Alt+B",
+      },
       treeDirectories: {
         "docs-repo:all": {
           expanded: ["docs", "growth"],
@@ -610,6 +616,9 @@ test("saveDesktopPreferences persists normalized app preferences across reposito
       fileTreeMode: "content",
       showDocumentTitles: false,
       gitRemoteCheckIntervalMinutes: 60,
+      keyboardShortcuts: {
+        "editor.bold": "Mod+Alt+B",
+      },
       mode: "live",
       treeDirectories: {
         "docs-repo:all": {
@@ -738,6 +747,7 @@ test("concurrent preference patches merge without dropping independent fields", 
       fileTreeMode: "all",
       showDocumentTitles: true,
       gitRemoteCheckIntervalMinutes: 30,
+      keyboardShortcuts: {},
       mode: "live",
       sidebarWidth: 344,
       sidebarCollapsed: true,

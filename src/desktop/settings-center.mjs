@@ -8,6 +8,7 @@ import {
   preferencePatch,
   resolveLanguagePreference,
 } from "../../public/settings-preferences.js";
+import { keyboardShortcutConflicts } from "../../public/keyboard-shortcuts.js";
 
 export const SETTINGS_CENTER_SECTIONS = Object.freeze([
   "general",
@@ -23,6 +24,7 @@ export const SETTINGS_CENTER_CHANNELS = Object.freeze({
   updatePreferences: "git-leaf-settings:update-preferences",
   action: "git-leaf-settings:action",
   show: "git-leaf-settings:show",
+  shortcutInput: "git-leaf-settings:shortcut-input",
 });
 
 export const SETTINGS_CENTER_DEFAULT_PREFERENCES = DEFAULT_USER_PREFERENCES;
@@ -35,6 +37,7 @@ const USER_PREFERENCE_KEYS = new Set([
   "fileTreeMode",
   "showDocumentTitles",
   "gitRemoteCheckIntervalMinutes",
+  "keyboardShortcuts",
 ]);
 const EXTERNAL_PROTOCOLS = new Set(["https:", "http:", "mailto:"]);
 const DEFAULT_PAGE_PATH = path.join(import.meta.dirname, "settings", "index.html");
@@ -74,6 +77,9 @@ export function normalizeSettingsAction(value) {
   }
   if (action.type === "check-for-updates") {
     return { type: "check-for-updates" };
+  }
+  if (action.type === "set-shortcut-capture") {
+    return { type: "set-shortcut-capture", active: action.active === true };
   }
   if (action.type === "open-external") {
     const url = normalizeExternalUrl(action.url);
@@ -121,6 +127,7 @@ export function createSettingsCenterController({
   let activeSection = "general";
   let showGeneration = 0;
   let statusHydrationGeneration = 0;
+  let shortcutCaptureActive = false;
 
   installIpcHandlers();
 
@@ -162,6 +169,7 @@ export function createSettingsCenterController({
     showGeneration += 1;
     statusHydrationGeneration += 1;
     visible = false;
+    shortcutCaptureActive = false;
     if (view && attached) {
       try {
         if (!mainWindow.isDestroyed?.()) {
@@ -229,6 +237,22 @@ export function createSettingsCenterController({
     loadPromise = null;
   }
 
+  function captureShortcutInput(input) {
+    if (!view || !visible || destroyed || !shortcutCaptureActive) {
+      return false;
+    }
+    view.webContents.send(SETTINGS_CENTER_CHANNELS.shortcutInput, {
+      key: String(input?.key ?? ""),
+      code: String(input?.code ?? ""),
+      metaKey: input?.meta === true || input?.metaKey === true,
+      ctrlKey: input?.control === true || input?.ctrlKey === true,
+      shiftKey: input?.shift === true || input?.shiftKey === true,
+      altKey: input?.alt === true || input?.altKey === true,
+      isComposing: input?.isComposing === true,
+    });
+    return true;
+  }
+
   function ensureView() {
     if (view) {
       return view;
@@ -267,7 +291,10 @@ export function createSettingsCenterController({
     const languageContext = await buildLanguageContext({
       preferences: preferencesOverride,
     });
-    const content = await getContent(languageContext.resolvedLanguage);
+    const content = await getContent(
+      languageContext.resolvedLanguage,
+      languageContext.preferences,
+    );
     return {
       preferences: languageContext.preferences,
       resolvedLanguage: languageContext.resolvedLanguage,
@@ -339,6 +366,13 @@ export function createSettingsCenterController({
         };
       }
 
+      if (
+        Object.hasOwn(patch, "keyboardShortcuts")
+        && keyboardShortcutConflicts(patch.keyboardShortcuts).length > 0
+      ) {
+        throw new Error("Keyboard shortcut bindings must be unique.");
+      }
+
       if (Object.hasOwn(patch, "language")) {
         statusHydrationGeneration += 1;
       }
@@ -346,7 +380,10 @@ export function createSettingsCenterController({
       const preferences = normalizeSettingsPreferences(
         saved ?? { ...await getPreferences(), ...patch },
       );
-      if (Object.hasOwn(patch, "language")) {
+      if (
+        Object.hasOwn(patch, "language")
+        || Object.hasOwn(patch, "keyboardShortcuts")
+      ) {
         const model = await buildModel({ preferences });
         return {
           ok: true,
@@ -371,6 +408,10 @@ export function createSettingsCenterController({
           ok: true,
           result: await checkForUpdates(),
         };
+      }
+      if (action.type === "set-shortcut-capture") {
+        shortcutCaptureActive = action.active;
+        return { ok: true, active: shortcutCaptureActive };
       }
       await shell.openExternal(action.url);
       return { ok: true };
@@ -408,11 +449,15 @@ export function createSettingsCenterController({
     resize,
     refresh,
     destroy,
+    captureShortcutInput,
     get visible() {
       return visible;
     },
     get section() {
       return activeSection;
+    },
+    get shortcutCaptureActive() {
+      return shortcutCaptureActive;
     },
     get webContents() {
       return view?.webContents ?? null;

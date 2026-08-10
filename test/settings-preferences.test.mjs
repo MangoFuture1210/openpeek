@@ -98,7 +98,31 @@ test("preference patches whitelist only the public settings", () => {
   assert.deepEqual(preferencePatch("gitRemoteCheckIntervalMinutes", "60"), {
     gitRemoteCheckIntervalMinutes: 60,
   });
+  assert.deepEqual(preferencePatch("keyboardShortcuts", {
+    "editor.bold": "cmd+alt+b",
+    "editor.italic": null,
+    arbitrary: "Mod+Q",
+  }), {
+    keyboardShortcuts: {
+      "editor.bold": "Mod+Alt+B",
+      "editor.italic": null,
+    },
+  });
   assert.equal(preferencePatch("sidebarWidth", 800), null);
+});
+
+test("keyboard shortcut preferences preserve only valid known overrides", () => {
+  assert.deepEqual(normalizeUserPreferences({
+    keyboardShortcuts: {
+      "navigation.toggle-sidebar": "Mod+Alt+S",
+      "editor.underline": "invalid",
+      "editor.strikethrough": "",
+      unknown: "Mod+Q",
+    },
+  }).keyboardShortcuts, {
+    "navigation.toggle-sidebar": "Mod+Alt+S",
+    "editor.strikethrough": null,
+  });
 });
 
 test("only file tree presentation changes require rebuilding the file tree", () => {

@@ -26,6 +26,7 @@ const CONTROLLED_TABLE_STYLE_SPAN =
 const MARKDOWN_TABLE_TEXT_STYLES = new Set([
   "bold",
   "italic",
+  "underline",
   "strikethrough",
 ]);
 
@@ -51,13 +52,21 @@ export function controlledTableStyleSpanAt(source) {
     .split(";")
     .map((declaration) => declaration.trim())
     .filter(Boolean);
-  if (declarations.length === 0 || declarations.length > 2) {
+  if (declarations.length === 0 || declarations.length > 3) {
     return null;
   }
 
   let color = null;
   let backgroundColor = null;
+  let underline = false;
   for (const declaration of declarations) {
+    if (/^text-decoration\s*:\s*underline$/i.test(declaration)) {
+      if (underline) {
+        return null;
+      }
+      underline = true;
+      continue;
+    }
     const property = declaration.match(
       /^(color|background-color)\s*:\s*(#[0-9a-fA-F]{6,8})$/i,
     );
@@ -83,12 +92,13 @@ export function controlledTableStyleSpanAt(source) {
     }
   }
 
-  if (!color && !backgroundColor) {
+  if (!color && !backgroundColor && !underline) {
     return null;
   }
   return {
     color,
     backgroundColor,
+    underline,
     content: match[3],
     length: match[0].length,
     source: match[0],
@@ -309,6 +319,7 @@ export function parseMarkdownTableCellFormat(content) {
     content: inner,
     bold: false,
     italic: false,
+    underline: false,
     strikethrough: false,
     color: null,
     backgroundColor: null,
@@ -325,6 +336,9 @@ export function parseMarkdownTableCellFormat(content) {
       }
       if (span.backgroundColor) {
         format.backgroundColor = span.backgroundColor;
+      }
+      if (span.underline) {
+        format.underline = true;
       }
       inner = span.content;
       changed = true;
@@ -376,6 +390,7 @@ export function serializeMarkdownTableCellFormat(format) {
     normalized.backgroundColor
       ? `background-color: ${normalized.backgroundColor}`
       : "",
+    normalized.underline ? "text-decoration: underline" : "",
   ].filter(Boolean);
   if (declarations.length > 0) {
     content = `<span style="${declarations.join("; ")};">${content}</span>`;
@@ -471,6 +486,7 @@ export function clearMarkdownTableTextFormatting(source, selection) {
   return applyMarkdownTableCellFormat(source, selection, {
     bold: false,
     italic: false,
+    underline: false,
     strikethrough: false,
     color: null,
     backgroundColor: null,
@@ -554,6 +570,7 @@ export function markdownTableSelectionFormatState(source, selection) {
   return {
     bold: uniformValue(formats.map((format) => format.bold)),
     italic: uniformValue(formats.map((format) => format.italic)),
+    underline: uniformValue(formats.map((format) => format.underline)),
     strikethrough: uniformValue(
       formats.map((format) => format.strikethrough),
     ),
@@ -714,7 +731,7 @@ function normalizeMarkdownTableCellFormat(format) {
     return null;
   }
 
-  const booleans = ["bold", "italic", "strikethrough"];
+  const booleans = ["bold", "italic", "underline", "strikethrough"];
   if (booleans.some((property) => typeof format[property] !== "boolean")) {
     return null;
   }
@@ -736,6 +753,7 @@ function normalizeMarkdownTableCellFormat(format) {
     content,
     bold: format.bold,
     italic: format.italic,
+    underline: format.underline,
     strikethrough: format.strikethrough,
     color,
     backgroundColor,
@@ -750,6 +768,7 @@ function normalizeMarkdownTableFormatPatch(patch) {
   const allowedProperties = new Set([
     "bold",
     "italic",
+    "underline",
     "strikethrough",
     "color",
     "backgroundColor",

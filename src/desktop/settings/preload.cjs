@@ -7,6 +7,7 @@ const CHANNELS = Object.freeze({
   updatePreferences: "git-leaf-settings:update-preferences",
   action: "git-leaf-settings:action",
   show: "git-leaf-settings:show",
+  shortcutInput: "git-leaf-settings:shortcut-input",
 });
 
 contextBridge.exposeInMainWorld("gitLeafSettings", Object.freeze({
@@ -31,6 +32,22 @@ contextBridge.exposeInMainWorld("gitLeafSettings", Object.freeze({
       type: "open-external",
       url: String(url ?? ""),
     });
+  },
+
+  setShortcutCapture(active) {
+    return ipcRenderer.invoke(CHANNELS.action, {
+      type: "set-shortcut-capture",
+      active: active === true,
+    });
+  },
+
+  onShortcutInput(listener) {
+    if (typeof listener !== "function") {
+      return () => {};
+    }
+    const wrapped = (_event, payload) => listener(payload);
+    ipcRenderer.on(CHANNELS.shortcutInput, wrapped);
+    return () => ipcRenderer.removeListener(CHANNELS.shortcutInput, wrapped);
   },
 
   onShow(listener) {

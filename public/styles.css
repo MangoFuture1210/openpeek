@@ -4679,6 +4679,10 @@ tr:last-child td {
   max-width: calc(100vw - 16px);
 }
 
+.cm-live-text-format-toolbar {
+  z-index: 47;
+}
+
 .cm-live-table-format-toolbar[hidden],
 .cm-live-table-column-handle[hidden] {
   display: none;
@@ -4738,6 +4742,12 @@ tr:last-child td {
 .cm-live-table-format-button.is-strikethrough .cm-live-table-format-symbol {
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
+}
+
+.cm-live-table-format-button.is-underline .cm-live-table-format-symbol {
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.14em;
 }
 
 .cm-live-table-format-button.is-clear-format .cm-live-table-format-symbol {

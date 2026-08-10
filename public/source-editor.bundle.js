@@ -33464,6 +33464,7 @@ var CONTROLLED_TABLE_STYLE_SPAN = /^<span\s+style=(["'])([^"'\n]*)\1\s*>([^\n]*?
 var MARKDOWN_TABLE_TEXT_STYLES = /* @__PURE__ */ new Set([
   "bold",
   "italic",
+  "underline",
   "strikethrough"
 ]);
 function normalizeMarkdownTableTextColor(value) {
@@ -33480,12 +33481,20 @@ function controlledTableStyleSpanAt(source) {
     return null;
   }
   const declarations = match2[2].split(";").map((declaration2) => declaration2.trim()).filter(Boolean);
-  if (declarations.length === 0 || declarations.length > 2) {
+  if (declarations.length === 0 || declarations.length > 3) {
     return null;
   }
   let color = null;
   let backgroundColor = null;
+  let underline = false;
   for (const declaration2 of declarations) {
+    if (/^text-decoration\s*:\s*underline$/i.test(declaration2)) {
+      if (underline) {
+        return null;
+      }
+      underline = true;
+      continue;
+    }
     const property = declaration2.match(
       /^(color|background-color)\s*:\s*(#[0-9a-fA-F]{6,8})$/i
     );
@@ -33510,12 +33519,13 @@ function controlledTableStyleSpanAt(source) {
       return null;
     }
   }
-  if (!color && !backgroundColor) {
+  if (!color && !backgroundColor && !underline) {
     return null;
   }
   return {
     color,
     backgroundColor,
+    underline,
     content: match2[3],
     length: match2[0].length,
     source: match2[0]
@@ -33681,6 +33691,7 @@ function parseMarkdownTableCellFormat(content2) {
     content: inner,
     bold: false,
     italic: false,
+    underline: false,
     strikethrough: false,
     color: null,
     backgroundColor: null
@@ -33695,6 +33706,9 @@ function parseMarkdownTableCellFormat(content2) {
       }
       if (span.backgroundColor) {
         format2.backgroundColor = span.backgroundColor;
+      }
+      if (span.underline) {
+        format2.underline = true;
       }
       inner = span.content;
       changed = true;
@@ -33738,7 +33752,8 @@ function serializeMarkdownTableCellFormat(format2) {
   }
   const declarations = [
     normalized.color ? `color: ${normalized.color}` : "",
-    normalized.backgroundColor ? `background-color: ${normalized.backgroundColor}` : ""
+    normalized.backgroundColor ? `background-color: ${normalized.backgroundColor}` : "",
+    normalized.underline ? "text-decoration: underline" : ""
   ].filter(Boolean);
   if (declarations.length > 0) {
     content2 = `<span style="${declarations.join("; ")};">${content2}</span>`;
@@ -33805,6 +33820,7 @@ function clearMarkdownTableTextFormatting(source, selection) {
   return applyMarkdownTableCellFormat(source, selection, {
     bold: false,
     italic: false,
+    underline: false,
     strikethrough: false,
     color: null,
     backgroundColor: null
@@ -33866,6 +33882,7 @@ function markdownTableSelectionFormatState(source, selection) {
   return {
     bold: uniformValue(formats.map((format2) => format2.bold)),
     italic: uniformValue(formats.map((format2) => format2.italic)),
+    underline: uniformValue(formats.map((format2) => format2.underline)),
     strikethrough: uniformValue(
       formats.map((format2) => format2.strikethrough)
     ),
@@ -33997,7 +34014,7 @@ function normalizeMarkdownTableCellFormat(format2) {
   if (/[\r\n]/.test(content2)) {
     return null;
   }
-  const booleans = ["bold", "italic", "strikethrough"];
+  const booleans = ["bold", "italic", "underline", "strikethrough"];
   if (booleans.some((property) => typeof format2[property] !== "boolean")) {
     return null;
   }
@@ -34010,6 +34027,7 @@ function normalizeMarkdownTableCellFormat(format2) {
     content: content2,
     bold: format2.bold,
     italic: format2.italic,
+    underline: format2.underline,
     strikethrough: format2.strikethrough,
     color,
     backgroundColor
@@ -34022,6 +34040,7 @@ function normalizeMarkdownTableFormatPatch(patch) {
   const allowedProperties = /* @__PURE__ */ new Set([
     "bold",
     "italic",
+    "underline",
     "strikethrough",
     "color",
     "backgroundColor"
@@ -35832,14 +35851,16 @@ function createRenderer(options) {
   renderer.renderer.rules.safe_image_html_inline = (tokens, index) => renderSafeImageHtml(tokens[index].content, options, { inline: true });
   renderer.renderer.rules.safe_html_break_inline = () => "<br>";
   renderer.renderer.rules.safe_table_style_span = (tokens, index, rendererOptions, env, self) => {
-    const { color, backgroundColor } = tokens[index].meta;
+    const { color, backgroundColor, underline } = tokens[index].meta;
     const classes = [
       color ? "git-leaf-text-color" : "",
-      backgroundColor ? "git-leaf-text-highlight" : ""
+      backgroundColor ? "git-leaf-text-highlight" : "",
+      underline ? "git-leaf-text-underline" : ""
     ].filter(Boolean);
     const declarations = [
       color ? `color:${color}` : "",
-      backgroundColor ? `background-color:${backgroundColor}` : ""
+      backgroundColor ? `background-color:${backgroundColor}` : "",
+      underline ? "text-decoration:underline" : ""
     ].filter(Boolean);
     return [
       `<span class="${classes.join(" ")}" style="${declarations.join(";")}">`,
@@ -35891,9 +35912,9 @@ function createRenderer(options) {
   };
   renderer.renderer.rules.fence = (tokens, index, rendererOptions, env, self) => {
     const token = tokens[index];
-    const sourceLines = renderedCodeSourceLines(token, env, { fenced: true });
+    const sourceLines2 = renderedCodeSourceLines(token, env, { fenced: true });
     if (fenceLanguage(token) === "mermaid") {
-      const range = sourceLines.length > 0 ? [{ start: sourceLines[0], end: sourceLines.at(-1) }] : null;
+      const range = sourceLines2.length > 0 ? [{ start: sourceLines2[0], end: sourceLines2.at(-1) }] : null;
       return sourceBlockOpen(token, env, {
         lineLayout: "diagram",
         ranges: range
@@ -35901,21 +35922,21 @@ function createRenderer(options) {
     }
     return sourceBlockOpen(token, env, {
       lineLayout: "code",
-      lines: sourceLines
+      lines: sourceLines2
     }) + annotateRenderedCodeLines(
       originalFence(tokens, index, rendererOptions, env, self),
-      sourceLines
+      sourceLines2
     ) + sourceBlockClose();
   };
   renderer.renderer.rules.code_block = (tokens, index, rendererOptions, env, self) => {
     const token = tokens[index];
-    const sourceLines = renderedCodeSourceLines(token, env);
+    const sourceLines2 = renderedCodeSourceLines(token, env);
     return sourceBlockOpen(token, env, {
       lineLayout: "code",
-      lines: sourceLines
+      lines: sourceLines2
     }) + annotateRenderedCodeLines(
       originalCodeBlock(tokens, index, rendererOptions, env, self),
-      sourceLines
+      sourceLines2
     ) + sourceBlockClose();
   };
   renderer.renderer.rules.bullet_list_open = (tokens, index, rendererOptions, env, self) => {
@@ -36085,7 +36106,8 @@ function safeTextColorSpanInlineRule(state, silent) {
     const token = state.push("safe_table_style_span", "span", 0);
     token.meta = {
       color: span.color,
-      backgroundColor: span.backgroundColor
+      backgroundColor: span.backgroundColor,
+      underline: span.underline
     };
     token.children = [];
     state.md.inline.parse(span.content, state.md, state.env, token.children);
@@ -36214,8 +36236,8 @@ function renderedCodeSourceLines(token, env, { fenced = false } = {}) {
   const firstLine = token.map[0] + (env.lineOffset ?? 0) + (fenced ? 2 : 1);
   return Array.from({ length: renderedLineCount }, (_, index) => firstLine + index);
 }
-function annotateRenderedCodeLines(renderedHtml, sourceLines) {
-  if (!Array.isArray(sourceLines) || sourceLines.length === 0) {
+function annotateRenderedCodeLines(renderedHtml, sourceLines2) {
+  if (!Array.isArray(sourceLines2) || sourceLines2.length === 0) {
     return renderedHtml;
   }
   const codeStart = renderedHtml.indexOf("<code");
@@ -36228,10 +36250,10 @@ function annotateRenderedCodeLines(renderedHtml, sourceLines) {
   const hasTrailingNewline = renderedContent.endsWith("\n");
   const contentWithoutTrailingNewline = hasTrailingNewline ? renderedContent.slice(0, -1) : renderedContent;
   const renderedLines = contentWithoutTrailingNewline.split("\n");
-  if (renderedLines.length !== sourceLines.length) {
+  if (renderedLines.length !== sourceLines2.length) {
     return renderedHtml;
   }
-  const annotatedContent = renderedLines.map((line, index) => `<span class="source-code-line" data-source-code-line="${sourceLines[index]}">${line}</span>`).join("\n");
+  const annotatedContent = renderedLines.map((line, index) => `<span class="source-code-line" data-source-code-line="${sourceLines2[index]}">${line}</span>`).join("\n");
   return renderedHtml.slice(0, contentStart) + annotatedContent + (hasTrailingNewline ? "\n" : "") + renderedHtml.slice(contentEnd);
 }
 function listItemSourceLines(tokens, startIndex, env) {
@@ -36559,6 +36581,328 @@ function uniqueHeadingId(value, env) {
   }
   usedIds.add(id2);
   return id2;
+}
+
+// src/content/markdown-text-format.mjs
+var MARKDOWN_FORMAT_ENVELOPES = Object.freeze([
+  Object.freeze({ open: "**", close: "**" }),
+  Object.freeze({ open: "__", close: "__" }),
+  Object.freeze({ open: "~~", close: "~~" }),
+  Object.freeze({ open: "_", close: "_" }),
+  Object.freeze({ open: "*", close: "*" })
+]);
+var CONTROLLED_STYLE_OPEN = /<span\s+style=(["'])([^"'\n]*)\1\s*>$/i;
+function markdownTextSelectionFormatState(source, selection) {
+  const normalized = normalizeTextSelection(source, selection);
+  if (!normalized) {
+    return null;
+  }
+  const segments = markdownTextSelectionSegments(source, normalized);
+  if (segments.length === 0) {
+    return null;
+  }
+  const formats = segments.map((segment) => parseMarkdownTableCellFormat(segment.source));
+  return {
+    bold: uniformValue2(formats.map((format2) => format2.bold)),
+    italic: uniformValue2(formats.map((format2) => format2.italic)),
+    underline: uniformValue2(formats.map((format2) => format2.underline)),
+    strikethrough: uniformValue2(
+      formats.map((format2) => format2.strikethrough)
+    ),
+    color: uniformValue2(formats.map((format2) => format2.color)),
+    backgroundColor: uniformValue2(
+      formats.map((format2) => format2.backgroundColor)
+    ),
+    selection: normalized,
+    segments
+  };
+}
+function formatMarkdownTextSelection(source, selection, patch) {
+  const text2 = String(source ?? "");
+  const state = markdownTextSelectionFormatState(text2, selection);
+  if (!state) {
+    return null;
+  }
+  const changes = [];
+  for (const segment of state.segments) {
+    const insert2 = formatMarkdownTextSegmentContent(segment.source, patch);
+    if (insert2 === null) {
+      return null;
+    }
+    changes.push({
+      from: segment.from,
+      to: segment.to,
+      insert: insert2
+    });
+  }
+  let delta = 0;
+  const mappedChanges = changes.map((change) => {
+    const from = change.from + delta;
+    const to = from + change.insert.length;
+    delta += change.insert.length - (change.to - change.from);
+    return { from, to };
+  });
+  const nextFrom = mappedChanges[0].from;
+  const nextTo = mappedChanges.at(-1).to;
+  const reversed = state.selection.anchor > state.selection.head;
+  const nextSelection = reversed ? { anchor: nextTo, head: nextFrom } : { anchor: nextFrom, head: nextTo };
+  const nextSource = applySourceChanges(text2, changes);
+  return {
+    source: nextSource,
+    changed: nextSource !== text2,
+    changes,
+    selection: nextSelection
+  };
+}
+function controlledMarkdownStyleSpansForLine(source) {
+  const text2 = String(source ?? "");
+  const spans = [];
+  let cursor = 0;
+  while (cursor < text2.length) {
+    const from = text2.indexOf("<span", cursor);
+    if (from < 0) {
+      break;
+    }
+    const span = controlledTableStyleSpanAt(text2.slice(from));
+    if (!span) {
+      cursor = from + 5;
+      continue;
+    }
+    const openEnd = text2.indexOf(">", from) + 1;
+    const to = from + span.length;
+    const closeStart = to - "</span>".length;
+    if (openEnd <= from || closeStart < openEnd) {
+      cursor = from + 5;
+      continue;
+    }
+    spans.push({
+      from,
+      to,
+      contentFrom: openEnd,
+      contentTo: closeStart,
+      color: span.color,
+      backgroundColor: span.backgroundColor,
+      underline: span.underline
+    });
+    cursor = to;
+  }
+  return spans;
+}
+function formatMarkdownTextSegmentContent(source, patch) {
+  const canonical = formatMarkdownTableCellContent(source, patch);
+  if (canonical === null) {
+    return null;
+  }
+  const format2 = parseMarkdownTableCellFormat(canonical);
+  let content2 = format2.content;
+  if (!content2) {
+    return content2;
+  }
+  if (format2.strikethrough) {
+    content2 = `~~${content2}~~`;
+  }
+  if (format2.italic) {
+    content2 = `_${content2}_`;
+  }
+  if (format2.bold) {
+    content2 = `**${content2}**`;
+  }
+  const declarations = [
+    format2.color ? `color: ${format2.color}` : "",
+    format2.backgroundColor ? `background-color: ${format2.backgroundColor}` : "",
+    format2.underline ? "text-decoration: underline" : ""
+  ].filter(Boolean);
+  return declarations.length > 0 ? `<span style="${declarations.join("; ")};">${content2}</span>` : content2;
+}
+function markdownTextSelectionSegments(source, selection) {
+  const lines = sourceLines(source);
+  const blockedLines = blockedMarkdownTextLines(lines);
+  const segments = [];
+  for (const line of lines) {
+    if (line.to < selection.from || line.from > selection.to || blockedLines.has(line.index)) {
+      continue;
+    }
+    const content2 = readableLineContentRange(line.text);
+    if (!content2) {
+      continue;
+    }
+    let from = Math.max(selection.from, line.from + content2.from);
+    let to = Math.min(selection.to, line.from + content2.to);
+    while (from < to && /\s/.test(source[from])) {
+      from += 1;
+    }
+    while (to > from && /\s/.test(source[to - 1])) {
+      to -= 1;
+    }
+    if (to <= from) {
+      continue;
+    }
+    const expanded = expandMarkdownTextSegment(
+      line.text,
+      from - line.from,
+      to - line.from,
+      content2
+    );
+    segments.push({
+      from: line.from + expanded.from,
+      to: line.from + expanded.to,
+      source: line.text.slice(expanded.from, expanded.to),
+      line: line.index + 1
+    });
+  }
+  return segments;
+}
+function normalizeTextSelection(source, selection) {
+  const length = String(source ?? "").length;
+  const anchor = Number(selection?.anchor ?? selection?.from);
+  const head = Number(selection?.head ?? selection?.to);
+  if (!Number.isInteger(anchor) || !Number.isInteger(head) || anchor < 0 || head < 0 || anchor > length || head > length || anchor === head) {
+    return null;
+  }
+  return {
+    anchor,
+    head,
+    from: Math.min(anchor, head),
+    to: Math.max(anchor, head)
+  };
+}
+function sourceLines(source) {
+  const text2 = String(source ?? "");
+  const lines = [];
+  let from = 0;
+  let index = 0;
+  for (const match2 of text2.matchAll(/\r?\n/g)) {
+    lines.push({
+      index,
+      from,
+      to: match2.index,
+      text: text2.slice(from, match2.index)
+    });
+    from = match2.index + match2[0].length;
+    index += 1;
+  }
+  lines.push({
+    index,
+    from,
+    to: text2.length,
+    text: text2.slice(from)
+  });
+  return lines;
+}
+function blockedMarkdownTextLines(lines) {
+  const blocked = /* @__PURE__ */ new Set();
+  const texts = lines.map((line) => line.text);
+  let inFrontmatter = false;
+  let inFence = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = lines[index].text.trim();
+    if (index === 0 && trimmed === "---") {
+      inFrontmatter = true;
+      blocked.add(index);
+      continue;
+    }
+    if (inFrontmatter) {
+      blocked.add(index);
+      if (trimmed === "---") {
+        inFrontmatter = false;
+      }
+      continue;
+    }
+    if (/^(?:`{3,}|~{3,})/.test(trimmed)) {
+      blocked.add(index);
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      blocked.add(index);
+      continue;
+    }
+    const table2 = markdownTableBlockAtLines(texts, index);
+    if (table2) {
+      for (let tableLine = index; tableLine <= table2.endIndex; tableLine += 1) {
+        blocked.add(tableLine);
+      }
+      index = table2.endIndex;
+      continue;
+    }
+    if (/^<img\b/i.test(trimmed) || /^<\/?[A-Z][A-Za-z0-9]*(?:\s|>|\/)/.test(trimmed)) {
+      blocked.add(index);
+    }
+  }
+  return blocked;
+}
+function readableLineContentRange(source) {
+  const text2 = String(source ?? "");
+  if (!text2.trim() || /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(text2)) {
+    return null;
+  }
+  let from = 0;
+  const blockquote2 = /^(\s*>+\s?)/.exec(text2.slice(from));
+  if (blockquote2) {
+    from += blockquote2[1].length;
+  }
+  const list2 = /^(\s*(?:[-*+]|\d+\.)\s+)/.exec(text2.slice(from));
+  if (list2) {
+    from += list2[1].length;
+  }
+  const heading3 = /^(#{1,6}\s+)/.exec(text2.slice(from));
+  if (heading3) {
+    from += heading3[1].length;
+  }
+  return from < text2.length ? { from, to: text2.length } : null;
+}
+function expandMarkdownTextSegment(text2, initialFrom, initialTo, bounds) {
+  let from = initialFrom;
+  let to = initialTo;
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const envelope of MARKDOWN_FORMAT_ENVELOPES) {
+      const nextFrom2 = from - envelope.open.length;
+      const nextTo2 = to + envelope.close.length;
+      if (nextFrom2 >= bounds.from && nextTo2 <= bounds.to && text2.slice(nextFrom2, from) === envelope.open && text2.slice(to, nextTo2) === envelope.close) {
+        from = nextFrom2;
+        to = nextTo2;
+        expanded = true;
+        break;
+      }
+    }
+    if (expanded) {
+      continue;
+    }
+    const prefix = text2.slice(bounds.from, from);
+    const open = CONTROLLED_STYLE_OPEN.exec(prefix);
+    if (!open || !text2.startsWith("</span>", to)) {
+      continue;
+    }
+    const nextFrom = bounds.from + open.index;
+    const nextTo = to + "</span>".length;
+    const span = controlledTableStyleSpanAt(text2.slice(nextFrom, nextTo));
+    if (span?.length === nextTo - nextFrom) {
+      from = nextFrom;
+      to = nextTo;
+      expanded = true;
+    }
+  }
+  return { from, to };
+}
+function applySourceChanges(source, changes) {
+  let nextSource = source;
+  for (const change of [...changes].reverse()) {
+    nextSource = [
+      nextSource.slice(0, change.from),
+      change.insert,
+      nextSource.slice(change.to)
+    ].join("");
+  }
+  return nextSource;
+}
+function uniformValue2(values2) {
+  if (values2.length === 0) {
+    return null;
+  }
+  const [first] = values2;
+  return values2.every((value) => Object.is(value, first)) ? first : "mixed";
 }
 
 // public/document-search.js
@@ -37016,6 +37360,7 @@ var WORKBENCH_MESSAGES = Object.freeze({
     "shortcuts.repository": "Repository",
     "shortcuts.title": "Keyboard Shortcuts",
     "shortcuts.documents": "Documents",
+    "shortcuts.editing": "Text Editing",
     "shortcuts.viewModes": "View Modes",
     "shortcuts.navigation": "Navigation",
     "shortcuts.help": "Help",
@@ -37058,7 +37403,12 @@ var WORKBENCH_MESSAGES = Object.freeze({
     "shortcut.toggleFolder": "Collapse or Expand Folder",
     "shortcut.openSelected": "Open Selected File",
     "shortcut.openSettings": "Open Settings",
-    "shortcut.openShortcuts": "Open Keyboard Shortcuts"
+    "shortcut.openShortcuts": "Open Keyboard Shortcuts",
+    "shortcut.bold": "Bold Selected Text",
+    "shortcut.italic": "Italicize Selected Text",
+    "shortcut.underline": "Underline Selected Text",
+    "shortcut.strikethrough": "Strikethrough Selected Text",
+    "shortcut.unassigned": "Unassigned"
   }),
   "zh-CN": Object.freeze({
     "loading.title": "\u6B63\u5728\u6253\u5F00\u4ED3\u5E93",
@@ -37478,6 +37828,7 @@ var WORKBENCH_MESSAGES = Object.freeze({
     "shortcuts.repository": "\u4ED3\u5E93",
     "shortcuts.title": "\u952E\u76D8\u5FEB\u6377\u952E",
     "shortcuts.documents": "\u6587\u6863",
+    "shortcuts.editing": "\u6587\u5B57\u7F16\u8F91",
     "shortcuts.viewModes": "\u663E\u793A\u6A21\u5F0F",
     "shortcuts.navigation": "\u5BFC\u822A",
     "shortcuts.help": "\u5E2E\u52A9",
@@ -37520,7 +37871,12 @@ var WORKBENCH_MESSAGES = Object.freeze({
     "shortcut.toggleFolder": "\u6298\u53E0\u6216\u5C55\u5F00\u6587\u4EF6\u5939",
     "shortcut.openSelected": "\u6253\u5F00\u9009\u4E2D\u6587\u4EF6",
     "shortcut.openSettings": "\u6253\u5F00\u8BBE\u7F6E",
-    "shortcut.openShortcuts": "\u6253\u5F00\u952E\u76D8\u5FEB\u6377\u952E"
+    "shortcut.openShortcuts": "\u6253\u5F00\u952E\u76D8\u5FEB\u6377\u952E",
+    "shortcut.bold": "\u52A0\u7C97\u9009\u4E2D\u6587\u5B57",
+    "shortcut.italic": "\u5C06\u9009\u4E2D\u6587\u5B57\u8BBE\u4E3A\u659C\u4F53",
+    "shortcut.underline": "\u4E3A\u9009\u4E2D\u6587\u5B57\u6DFB\u52A0\u4E0B\u5212\u7EBF",
+    "shortcut.strikethrough": "\u4E3A\u9009\u4E2D\u6587\u5B57\u6DFB\u52A0\u5220\u9664\u7EBF",
+    "shortcut.unassigned": "\u672A\u8BBE\u7F6E"
   })
 });
 
@@ -37591,9 +37947,415 @@ function isRemoteImageSource(source) {
   return /^(?:https?:)?\/\//i.test(String(source ?? "").trim());
 }
 
+// public/keyboard-shortcuts.js
+var SHORTCUT_ACTION_DEFINITIONS = Object.freeze({
+  "repository.open": shortcutDefinition("Mod+O", "shortcut.openRepository"),
+  "repository.previous": shortcutDefinition(
+    "Mod+Alt+Left",
+    "shortcut.previousRepository"
+  ),
+  "repository.next": shortcutDefinition(
+    "Mod+Alt+Right",
+    "shortcut.nextRepository"
+  ),
+  "document.close-tab": shortcutDefinition("Mod+W", "shortcut.closeTab"),
+  "document.find": shortcutDefinition("Mod+F", "shortcut.findDocument"),
+  "document.favorite": shortcutDefinition("Mod+D", "shortcut.toggleFavorite"),
+  "document.copy-path": shortcutDefinition(
+    "Mod+Shift+C",
+    "shortcut.copyDocumentPath"
+  ),
+  "document.copy-share": shortcutDefinition(
+    "Mod+Shift+L",
+    "shortcut.copyShareLink"
+  ),
+  "document.open-github": shortcutDefinition(
+    "Mod+Shift+G",
+    "shortcut.openGitHub"
+  ),
+  "document.open-source": shortcutDefinition(
+    "Mod+Shift+O",
+    "shortcut.openSource"
+  ),
+  "document.reveal": shortcutDefinition(
+    "Mod+Shift+R",
+    "shortcut.revealFile"
+  ),
+  "view.preview": shortcutDefinition("Mod+P", "shortcut.preview"),
+  "view.source": shortcutDefinition("Mod+S", "shortcut.source"),
+  "view.live": shortcutDefinition("Mod+L", "shortcut.live"),
+  "navigation.toggle-sidebar": shortcutDefinition(
+    "Mod+\\",
+    "shortcut.toggleSidebar"
+  ),
+  "navigation.toggle-outline": shortcutDefinition(
+    "Mod+Shift+B",
+    "shortcut.toggleOutline"
+  ),
+  "navigation.back": shortcutDefinition("Mod+[", "shortcut.back"),
+  "navigation.forward": shortcutDefinition("Mod+]", "shortcut.forward"),
+  "navigation.focus-search": shortcutDefinition("Mod+K", "shortcut.focusSearch"),
+  "navigation.focus-tree": shortcutDefinition(
+    "Mod+Shift+E",
+    "shortcut.focusTree"
+  ),
+  "help.settings": shortcutDefinition("Mod+,", "shortcut.openSettings"),
+  "help.shortcuts": shortcutDefinition("Mod+Shift+/", "shortcut.openShortcuts"),
+  "editor.bold": shortcutDefinition("Mod+B", "shortcut.bold"),
+  "editor.italic": shortcutDefinition("Mod+I", "shortcut.italic"),
+  "editor.underline": shortcutDefinition("Mod+U", "shortcut.underline"),
+  "editor.strikethrough": shortcutDefinition(
+    "Mod+Shift+X",
+    "shortcut.strikethrough"
+  )
+});
+var SHORTCUT_GROUPS = Object.freeze([
+  Object.freeze({
+    titleKey: "shortcuts.repository",
+    shortcuts: Object.freeze([
+      actionShortcut("repository.open"),
+      fixedShortcut("Command+1..9", "shortcut.switchVisibleRepository"),
+      fixedShortcut("Command+0", "shortcut.openAnotherRepository"),
+      fixedShortcut("Command+Option+1..9", "shortcut.switchRepositoryNumber"),
+      actionShortcut("repository.previous"),
+      actionShortcut("repository.next")
+    ])
+  }),
+  Object.freeze({
+    titleKey: "shortcuts.documents",
+    shortcuts: Object.freeze([
+      fixedShortcut("Command+1..8", "shortcut.switchTabNumber"),
+      fixedShortcut("Command+9", "shortcut.switchLastTab"),
+      fixedShortcut("Command+Shift+[", "shortcut.previousTab"),
+      fixedShortcut("Command+Shift+]", "shortcut.nextTab"),
+      fixedShortcut("Ctrl+Shift+Tab", "shortcut.previousTabWindows"),
+      fixedShortcut("Ctrl+Tab", "shortcut.nextTabWindows"),
+      actionShortcut("document.close-tab"),
+      actionShortcut("document.find"),
+      actionShortcut("document.favorite"),
+      actionShortcut("document.copy-path"),
+      actionShortcut("document.copy-share"),
+      actionShortcut("document.open-github"),
+      actionShortcut("document.open-source"),
+      actionShortcut("document.reveal"),
+      fixedShortcut("Command+Click", "shortcut.activeTab"),
+      fixedShortcut("Command+Enter", "shortcut.activeTab")
+    ])
+  }),
+  Object.freeze({
+    titleKey: "shortcuts.editing",
+    shortcuts: Object.freeze([
+      actionShortcut("editor.bold"),
+      actionShortcut("editor.italic"),
+      actionShortcut("editor.underline"),
+      actionShortcut("editor.strikethrough")
+    ])
+  }),
+  Object.freeze({
+    titleKey: "shortcuts.viewModes",
+    shortcuts: Object.freeze([
+      actionShortcut("view.preview"),
+      actionShortcut("view.source"),
+      actionShortcut("view.live")
+    ])
+  }),
+  Object.freeze({
+    titleKey: "shortcuts.navigation",
+    shortcuts: Object.freeze([
+      actionShortcut("navigation.toggle-sidebar"),
+      fixedShortcut("Option+1", "shortcut.showAllView"),
+      fixedShortcut("Option+2", "shortcut.showFavoritesView"),
+      fixedShortcut("Option+3", "shortcut.showSyncView"),
+      actionShortcut("navigation.toggle-outline"),
+      actionShortcut("navigation.back"),
+      actionShortcut("navigation.forward"),
+      actionShortcut("navigation.focus-search"),
+      actionShortcut("navigation.focus-tree"),
+      fixedShortcut("Escape", "shortcut.focusTreeFromSearch"),
+      fixedShortcut("ArrowUp/Down", "shortcut.moveTree"),
+      fixedShortcut("ArrowLeft/Right", "shortcut.toggleFolder"),
+      fixedShortcut("Enter", "shortcut.openSelected")
+    ])
+  }),
+  Object.freeze({
+    titleKey: "shortcuts.help",
+    shortcuts: Object.freeze([
+      actionShortcut("help.settings"),
+      actionShortcut("help.shortcuts")
+    ])
+  })
+]);
+var SHORTCUT_MODIFIER_ORDER = Object.freeze([
+  "Mod",
+  "Ctrl",
+  "Meta",
+  "Alt",
+  "Shift"
+]);
+var SHORTCUT_KEY_ALIASES = Object.freeze({
+  "?": "/",
+  arrowleft: "Left",
+  arrowright: "Right",
+  arrowup: "Up",
+  arrowdown: "Down",
+  backspace: "Backspace",
+  delete: "Delete",
+  end: "End",
+  enter: "Enter",
+  escape: "Escape",
+  home: "Home",
+  left: "Left",
+  pagedown: "PageDown",
+  pageup: "PageUp",
+  right: "Right",
+  space: "Space",
+  tab: "Tab",
+  up: "Up",
+  down: "Down"
+});
+var CODE_KEYS = Object.freeze({
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Comma: ",",
+  Equal: "=",
+  Minus: "-",
+  Period: ".",
+  Quote: "'",
+  Semicolon: ";",
+  Slash: "/"
+});
+var SHORTCUT_PUNCTUATION = /* @__PURE__ */ new Set(["\\", "[", "]", ",", ".", "/", ";", "'", "-", "="]);
+var KEYBOARD_SHORTCUT_ACTION_IDS = Object.freeze(
+  Object.keys(SHORTCUT_ACTION_DEFINITIONS)
+);
+function normalizeKeyboardShortcut(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  const parts = raw.split("+").map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) {
+    return "";
+  }
+  const rawKey = parts.pop();
+  const modifiers2 = /* @__PURE__ */ new Set();
+  for (const part of parts) {
+    const modifier = normalizeShortcutModifier(part);
+    if (!modifier || modifiers2.has(modifier)) {
+      return "";
+    }
+    modifiers2.add(modifier);
+  }
+  if (!modifiers2.has("Mod") && !modifiers2.has("Ctrl") && !modifiers2.has("Meta") && !modifiers2.has("Alt")) {
+    return "";
+  }
+  const key = normalizeShortcutKey(rawKey);
+  if (!key) {
+    return "";
+  }
+  return [
+    ...SHORTCUT_MODIFIER_ORDER.filter((modifier) => modifiers2.has(modifier)),
+    key
+  ].join("+");
+}
+function normalizeKeyboardShortcutOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const overrides2 = {};
+  for (const id2 of KEYBOARD_SHORTCUT_ACTION_IDS) {
+    if (!Object.hasOwn(value, id2)) {
+      continue;
+    }
+    if (value[id2] === null || value[id2] === "") {
+      overrides2[id2] = null;
+      continue;
+    }
+    const shortcut = normalizeKeyboardShortcut(value[id2]);
+    if (shortcut) {
+      overrides2[id2] = shortcut;
+    }
+  }
+  return overrides2;
+}
+function keyboardShortcutBinding(id2, overrides2 = {}) {
+  const definition = SHORTCUT_ACTION_DEFINITIONS[id2];
+  if (!definition) {
+    return null;
+  }
+  const normalized = normalizeKeyboardShortcutOverrides(overrides2);
+  return Object.hasOwn(normalized, id2) ? normalized[id2] : definition.defaultBinding;
+}
+function keyboardShortcutFromEvent(event = {}, { platform } = {}) {
+  if (event.isComposing) {
+    return "";
+  }
+  const key = shortcutKeyFromEvent(event);
+  if (!key) {
+    return "";
+  }
+  const resolvedPlatform = normalizeShortcutPlatform(platform);
+  const meta2 = event.metaKey === true || event.meta === true;
+  const ctrl = event.ctrlKey === true || event.control === true;
+  const modifiers2 = [];
+  if (resolvedPlatform === "darwin" ? meta2 : ctrl) {
+    modifiers2.push("Mod");
+  }
+  if (ctrl && resolvedPlatform === "darwin") {
+    modifiers2.push("Ctrl");
+  }
+  if (meta2 && resolvedPlatform !== "darwin") {
+    modifiers2.push("Meta");
+  }
+  if (event.altKey === true || event.alt === true) {
+    modifiers2.push("Alt");
+  }
+  if (event.shiftKey === true || event.shift === true) {
+    modifiers2.push("Shift");
+  }
+  return normalizeKeyboardShortcut([...modifiers2, key].join("+"));
+}
+function keyboardShortcutMatches(event, id2, overrides2 = {}, options = {}) {
+  const binding = keyboardShortcutBinding(id2, overrides2);
+  return Boolean(binding) && keyboardShortcutFromEvent(event, options) === binding;
+}
+function keyboardShortcutDisplay(binding, { platform } = {}) {
+  const shortcut = normalizeKeyboardShortcut(binding);
+  if (!shortcut) {
+    return "";
+  }
+  const resolvedPlatform = normalizeShortcutPlatform(platform);
+  return shortcut.split("+").map((part) => {
+    if (part === "Mod") {
+      return resolvedPlatform === "darwin" ? "Command" : "Ctrl";
+    }
+    if (part === "Alt") {
+      return resolvedPlatform === "darwin" ? "Option" : "Alt";
+    }
+    return part;
+  }).join("+");
+}
+function getKeyboardShortcutGroups(locale = "en", options = {}) {
+  const t2 = createTranslator(WORKBENCH_MESSAGES, locale);
+  const overrides2 = normalizeKeyboardShortcutOverrides(options.bindings);
+  const platform = normalizeShortcutPlatform(options.platform);
+  return SHORTCUT_GROUPS.map((group) => ({
+    title: t2(group.titleKey),
+    shortcuts: group.shortcuts.map((shortcut) => {
+      if (!shortcut.actionId) {
+        return {
+          keys: fixedShortcutDisplay(shortcut.keys, platform),
+          action: t2(shortcut.actionKey),
+          customizable: false
+        };
+      }
+      const definition = SHORTCUT_ACTION_DEFINITIONS[shortcut.actionId];
+      const binding = keyboardShortcutBinding(shortcut.actionId, overrides2);
+      return {
+        id: shortcut.actionId,
+        binding,
+        defaultBinding: definition.defaultBinding,
+        keys: keyboardShortcutDisplay(binding, { platform }) || t2("shortcut.unassigned"),
+        defaultKeys: keyboardShortcutDisplay(definition.defaultBinding, { platform }),
+        action: t2(definition.actionKey),
+        customizable: true
+      };
+    })
+  }));
+}
+var KEYBOARD_SHORTCUT_GROUPS = getKeyboardShortcutGroups("en");
+function shortcutDefinition(defaultBinding, actionKey) {
+  return Object.freeze({
+    defaultBinding,
+    actionKey
+  });
+}
+function actionShortcut(actionId) {
+  return Object.freeze({ actionId });
+}
+function fixedShortcut(keys2, actionKey) {
+  return Object.freeze({ keys: keys2, actionKey });
+}
+function normalizeShortcutModifier(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (["mod", "command", "cmd", "cmdorctrl", "ctrlorcmd"].includes(normalized)) {
+    return "Mod";
+  }
+  if (["ctrl", "control"].includes(normalized)) {
+    return "Ctrl";
+  }
+  if (["meta", "super"].includes(normalized)) {
+    return "Meta";
+  }
+  if (["alt", "option", "opt"].includes(normalized)) {
+    return "Alt";
+  }
+  if (normalized === "shift") {
+    return "Shift";
+  }
+  return "";
+}
+function normalizeShortcutKey(value) {
+  const raw = String(value ?? "").trim();
+  if (/^[a-z]$/i.test(raw)) {
+    return raw.toUpperCase();
+  }
+  if (/^[0-9]$/.test(raw) || SHORTCUT_PUNCTUATION.has(raw)) {
+    return raw;
+  }
+  if (/^f(?:[1-9]|1[0-2])$/i.test(raw)) {
+    return raw.toUpperCase();
+  }
+  return SHORTCUT_KEY_ALIASES[raw.toLowerCase()] ?? "";
+}
+function shortcutKeyFromEvent(event) {
+  const code3 = String(event.code ?? "");
+  if (/^Key[A-Z]$/.test(code3)) {
+    return code3.slice(3);
+  }
+  if (/^Digit[0-9]$/.test(code3)) {
+    return code3.slice(5);
+  }
+  if (/^F(?:[1-9]|1[0-2])$/.test(code3)) {
+    return code3;
+  }
+  if (CODE_KEYS[code3]) {
+    return CODE_KEYS[code3];
+  }
+  return normalizeShortcutKey(event.key);
+}
+function normalizeShortcutPlatform(value) {
+  const explicit = String(value ?? "").toLowerCase();
+  if (explicit === "darwin" || explicit.includes("mac")) {
+    return "darwin";
+  }
+  if (explicit === "win32" || explicit.includes("win")) {
+    return "win32";
+  }
+  if (explicit) {
+    return explicit;
+  }
+  const detected = String(globalThis.navigator?.platform ?? "").toLowerCase();
+  if (detected.includes("mac")) {
+    return "darwin";
+  }
+  if (detected.includes("win")) {
+    return "win32";
+  }
+  return detected || "darwin";
+}
+function fixedShortcutDisplay(keys2, platform) {
+  if (platform === "darwin") {
+    return keys2;
+  }
+  return String(keys2).replaceAll("Command", "Ctrl").replaceAll("Option", "Alt");
+}
+
 // src/client/source-editor.mjs
 var livePreviewEnterEffect = StateEffect.define();
 var livePreviewExitEffect = StateEffect.define();
+var preserveEditorContextAnnotation = Annotation.define();
 var sourceEditorSetup = [
   minimalSetup,
   lineNumbers(),
@@ -37704,8 +38466,11 @@ var SOURCE_EDITOR_TABLE_MESSAGES = {
   en: {
     "toolbar.label": "Table formatting",
     "toolbar.close": "Close table tools",
+    "textToolbar.label": "Text formatting",
+    "textToolbar.close": "Close text tools",
     "format.bold": "Bold",
     "format.italic": "Italic",
+    "format.underline": "Underline",
     "format.strikethrough": "Strikethrough",
     "format.clear": "Clear text formatting",
     "palette.textColor": "Text color",
@@ -37732,8 +38497,11 @@ var SOURCE_EDITOR_TABLE_MESSAGES = {
   "zh-CN": {
     "toolbar.label": "\u8868\u683C\u683C\u5F0F",
     "toolbar.close": "\u5173\u95ED\u8868\u683C\u5DE5\u5177\u680F",
+    "textToolbar.label": "\u6587\u5B57\u683C\u5F0F",
+    "textToolbar.close": "\u5173\u95ED\u6587\u5B57\u5DE5\u5177\u680F",
     "format.bold": "\u7C97\u4F53",
     "format.italic": "\u659C\u4F53",
+    "format.underline": "\u4E0B\u5212\u7EBF",
     "format.strikethrough": "\u5220\u9664\u7EBF",
     "format.clear": "\u6E05\u9664\u6587\u5B57\u683C\u5F0F",
     "palette.textColor": "\u6587\u5B57\u989C\u8272",
@@ -38009,10 +38777,19 @@ var liveMarkdownDecorations = StateField.define({
     return buildLiveMarkdownDecorations(state);
   },
   update(decorations2, transaction) {
-    const selectionChanged = !transaction.startState.selection.eq(transaction.state.selection);
+    const previousSuppression = transaction.startState.field(
+      liveEditingSuppression,
+      false
+    );
     const activeLineSuppressed = transaction.state.field(liveEditingSuppression, false);
-    const activeLineSuppressionChanged = transaction.startState.field(liveEditingSuppression, false) !== activeLineSuppressed;
-    if (transaction.docChanged || selectionChanged || activeLineSuppressionChanged) {
+    const selectionPresentationChanged = liveMarkdownSelectionPresentation(
+      transaction.startState,
+      previousSuppression
+    ) !== liveMarkdownSelectionPresentation(
+      transaction.state,
+      activeLineSuppressed
+    );
+    if (transaction.docChanged || selectionPresentationChanged) {
       return buildLiveMarkdownDecorations(transaction.state, {
         suppressActiveLine: activeLineSuppressed
       });
@@ -38122,13 +38899,17 @@ function sourceEditorThemeForTheme(theme2) {
       textAlign: "right"
     },
     ".cm-activeLine": {
-      backgroundColor: "var(--panel-weak)"
+      backgroundColor: "var(--git-leaf-active-line-bg, var(--panel-weak))"
     },
     ".cm-activeLineGutter": {
       backgroundColor: "var(--panel-weak)"
     },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-      backgroundColor: isDarkTheme(theme2) ? "rgba(122, 162, 247, 0.35)" : "rgba(37, 99, 235, 0.18)"
+      backgroundColor: `var(--git-leaf-selection-bg, ${isDarkTheme(theme2) ? "rgba(122, 162, 247, 0.35)" : "rgba(37, 99, 235, 0.18)"})`
+    },
+    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+      // Match CodeMirror's focused-selection specificity instead of losing to its base theme.
+      backgroundColor: `var(--git-leaf-selection-bg, ${isDarkTheme(theme2) ? "rgba(122, 162, 247, 0.35)" : "rgba(37, 99, 235, 0.18)"})`
     },
     ".cm-cursor": {
       borderLeftColor: "var(--text)"
@@ -38160,7 +38941,9 @@ function liveMarkdownThemeForTheme(theme2) {
   return EditorView.theme({
     "&.cm-editor": {
       backgroundColor: "var(--panel)",
-      color: "var(--text)"
+      color: "var(--text)",
+      "--git-leaf-active-line-bg": "transparent",
+      "--git-leaf-selection-bg": isDarkTheme(theme2) ? "#31557f" : "#b9d5ff"
     },
     ".cm-content": {
       color: "var(--text)",
@@ -38193,7 +38976,16 @@ function liveMarkdownThemeForTheme(theme2) {
       backgroundColor: "transparent"
     },
     "&.cm-focused .cm-activeLine": {
-      backgroundColor: "var(--panel-weak)"
+      // Keep CodeMirror's selection layer visible across wrapped active lines.
+      backgroundColor: "transparent"
+    },
+    ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+      backgroundColor: isDarkTheme(theme2) ? "#31557f" : "#b9d5ff",
+      borderRadius: "2px",
+      boxShadow: isDarkTheme(theme2) ? "inset 0 0 0 1px #79aef2" : "inset 0 0 0 1px #5b9cf5"
+    },
+    ".cm-content ::selection": {
+      backgroundColor: "var(--git-leaf-selection-bg)"
     },
     ".cm-gutters": {
       backgroundColor: "transparent",
@@ -38297,6 +39089,16 @@ function liveMarkdownThemeForTheme(theme2) {
     },
     ".cm-live-emphasis": {
       fontStyle: "italic"
+    },
+    ".cm-live-strikethrough": {
+      textDecoration: "line-through"
+    },
+    ".cm-live-underline": {
+      textDecoration: "underline",
+      textUnderlineOffset: "0.14em"
+    },
+    ".cm-live-controlled-style": {
+      borderRadius: "3px"
     },
     ".cm-live-inline-code": {
       borderRadius: "4px",
@@ -38405,6 +39207,19 @@ function liveMarkdownThemeForTheme(theme2) {
     }
   }, { dark: isDarkTheme(theme2) });
 }
+function keyboardTextStyleFromEvent(event, shortcuts = {}, options = {}) {
+  for (const [id2, style] of [
+    ["editor.bold", "bold"],
+    ["editor.italic", "italic"],
+    ["editor.underline", "underline"],
+    ["editor.strikethrough", "strikethrough"]
+  ]) {
+    if (keyboardShortcutMatches(event, id2, shortcuts, options)) {
+      return style;
+    }
+  }
+  return null;
+}
 function createSourceEditor({
   parent,
   doc: doc2 = "",
@@ -38426,6 +39241,7 @@ function createSourceEditor({
   theme: theme2 = "light",
   getDocumentPath = () => "",
   getRenderOptions = () => ({}),
+  getKeyboardShortcuts = () => ({}),
   onBeforeSlashCommand = async () => true
 }) {
   let suppressChange = false;
@@ -38439,6 +39255,7 @@ function createSourceEditor({
   const liveModeCompartment = new Compartment();
   const editableCompartment = new Compartment();
   let componentInteraction = null;
+  let textSelectionInteraction = null;
   const tableInteraction = createLiveTableInteraction({
     getView: () => view,
     getMode: () => currentMode,
@@ -38447,6 +39264,7 @@ function createSourceEditor({
     documentRoot: editorDocument,
     onSelect: () => {
       componentInteraction?.clearSelection();
+      textSelectionInteraction?.clearSelection();
       onContextToolbarSelect();
     }
   });
@@ -38458,6 +39276,19 @@ function createSourceEditor({
     documentRoot: editorDocument,
     onSelect: () => {
       tableInteraction.clearSelection();
+      textSelectionInteraction?.clearSelection();
+      onContextToolbarSelect();
+    }
+  });
+  textSelectionInteraction = createLiveTextSelectionInteraction({
+    getView: () => view,
+    getMode: () => currentMode,
+    isEditable: () => currentEditable,
+    locale: locale ?? language2,
+    documentRoot: editorDocument,
+    onSelect: () => {
+      tableInteraction.clearSelection();
+      componentInteraction?.clearSelection();
       onContextToolbarSelect();
     }
   });
@@ -38473,6 +39304,7 @@ function createSourceEditor({
   }
   view = new EditorView({
     doc: doc2,
+    dispatchTransactions: dispatchEditorTransactions,
     extensions: [
       sourceEditorSetup,
       markdown(),
@@ -38499,6 +39331,7 @@ function createSourceEditor({
         icons: false
       }),
       EditorView.updateListener.of((update) => {
+        textSelectionInteraction?.handleUpdate(update);
         if (update.focusChanged) {
           onFocusChange?.(update.view.hasFocus);
         }
@@ -38507,7 +39340,7 @@ function createSourceEditor({
         }
         onChange?.(update.state.doc.toString());
       }),
-      EditorView.domEventHandlers({
+      Prec.highest(EditorView.domEventHandlers({
         keydown(event, eventView) {
           if ((currentMode === "source" || currentMode === "live") && event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
             setTimeout(() => startCompletion(eventView), 0);
@@ -38520,6 +39353,20 @@ function createSourceEditor({
             }
             return false;
           }
+          const textStyle = keyboardTextStyleFromEvent(
+            event,
+            getKeyboardShortcuts()
+          );
+          if (currentMode === "live" && textStyle && tableInteraction.hasSelection()) {
+            event.preventDefault();
+            tableInteraction.applyTextStyle(textStyle);
+            return true;
+          }
+          if (currentMode === "live" && textStyle && textSelectionInteraction.hasSelection()) {
+            event.preventDefault();
+            textSelectionInteraction.applyTextStyle(textStyle);
+            return true;
+          }
           if (currentMode !== "live" || event.key !== "Escape") {
             return false;
           }
@@ -38531,6 +39378,11 @@ function createSourceEditor({
           if (componentInteraction.hasSelection()) {
             event.preventDefault();
             componentInteraction.clearSelection();
+            return true;
+          }
+          if (textSelectionInteraction.hasSelection()) {
+            event.preventDefault();
+            textSelectionInteraction.clearSelection();
             return true;
           }
           event.preventDefault();
@@ -38564,7 +39416,7 @@ function createSourceEditor({
           void pasteImageIntoEditor(eventView, imageFile, onPasteImage);
           return true;
         }
-      })
+      }))
     ],
     parent
   });
@@ -38583,13 +39435,6 @@ function createSourceEditor({
       if (!closestElement(event.target, ".cm-live-table-cell-editor")) {
         event.preventDefault();
       }
-      return;
-    }
-    const link2 = liveMarkdownLinkFromMouseEvent(event, view);
-    if (link2) {
-      event.preventDefault();
-      event.stopPropagation();
-      onLinkClick?.({ ...link2, event });
       return;
     }
     const field = liveFrontmatterFieldFromMouseEvent(event, view);
@@ -38617,6 +39462,18 @@ function createSourceEditor({
       onBlankClick?.(event);
     }
   };
+  const handleClick = (event) => {
+    if (currentMode !== "live" || !view.state.selection.main.empty) {
+      return;
+    }
+    const link2 = liveMarkdownLinkFromMouseEvent(event, view);
+    if (!link2) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onLinkClick?.({ ...link2, event });
+  };
   const visibleLine = () => {
     const scrollRect = view.scrollDOM.getBoundingClientRect();
     const pos = view.posAtCoords({
@@ -38628,6 +39485,7 @@ function createSourceEditor({
   const handleScroll = () => {
     tableInteraction.refreshPositions();
     componentInteraction.refreshPositions();
+    textSelectionInteraction.refreshPositions();
     const line = visibleLine();
     onScroll?.({
       scrollTop: view.scrollDOM.scrollTop,
@@ -38663,9 +39521,11 @@ function createSourceEditor({
   );
   view.dom.addEventListener("keydown", tableInteraction.handleKeyDown, true);
   view.dom.addEventListener("mousedown", handleMouseDown, true);
+  view.dom.addEventListener("click", handleClick, true);
   view.scrollDOM.addEventListener("scroll", handleScroll);
   globalThis.addEventListener?.("resize", tableInteraction.refreshPositions);
   globalThis.addEventListener?.("resize", componentInteraction.refreshPositions);
+  globalThis.addEventListener?.("resize", textSelectionInteraction.refreshPositions);
   return {
     getValue() {
       return view.state.doc.toString();
@@ -38686,7 +39546,7 @@ function createSourceEditor({
       };
       suppressChange = true;
       try {
-        view.dispatch({
+        view.dispatch(preserveEditorContext({
           changes,
           effects: remoteMergeHighlightEffect.of(
             highlightChanges ? {
@@ -38694,7 +39554,7 @@ function createSourceEditor({
               to: changes.from + String(changes.insert ?? "").length
             } : null
           )
-        });
+        }, preserveSelection));
       } finally {
         suppressChange = false;
       }
@@ -38742,6 +39602,7 @@ function createSourceEditor({
         tableInteraction.commitEditor();
         tableInteraction.clearSelection({ commit: false });
         componentInteraction.clearSelection();
+        textSelectionInteraction.clearSelection();
       }
       currentMode = mode;
       view.dispatch({
@@ -38756,6 +39617,7 @@ function createSourceEditor({
       if (!nextEditable) {
         tableInteraction.commitEditor();
         componentInteraction.clearSelection();
+        textSelectionInteraction.clearSelection();
       }
       currentEditable = nextEditable;
       view.dispatch({
@@ -38798,6 +39660,7 @@ function createSourceEditor({
     clearLiveContextSelection() {
       tableInteraction.clearSelection();
       componentInteraction.clearSelection();
+      textSelectionInteraction.clearSelection();
     },
     replaceLine(lineNumber, text2, { preserveSelection = false } = {}) {
       if (!Number.isInteger(lineNumber) || lineNumber < 1 || lineNumber > view.state.doc.lines) {
@@ -38810,14 +39673,14 @@ function createSourceEditor({
           to: line.to,
           insert: String(text2 ?? "")
         },
-        scrollIntoView: true
+        scrollIntoView: !preserveSelection
       };
       if (!preserveSelection) {
         transaction.selection = {
           anchor: line.from + String(text2 ?? "").length
         };
       }
-      view.dispatch(transaction);
+      view.dispatch(preserveEditorContext(transaction, preserveSelection));
       return true;
     },
     lineRect(lineNumber) {
@@ -38870,28 +39733,33 @@ function createSourceEditor({
         ].join("")
       );
     },
-    replaceDocument(value) {
+    replaceDocument(value, { preserveSelection = true } = {}) {
       const nextValue = String(value ?? "");
-      view.dispatch({
-        changes: {
-          from: 0,
-          to: view.state.doc.length,
-          insert: nextValue
-        },
-        scrollIntoView: true
-      });
+      const currentValue = view.state.doc.toString();
+      if (currentValue === nextValue) {
+        return false;
+      }
+      const changes = preserveSelection ? minimalDocumentChange(currentValue, nextValue) : {
+        from: 0,
+        to: view.state.doc.length,
+        insert: nextValue
+      };
+      view.dispatch(preserveEditorContext({
+        changes,
+        scrollIntoView: !preserveSelection
+      }, preserveSelection));
       return true;
     },
-    deleteLine(lineNumber) {
+    deleteLine(lineNumber, { preserveSelection = true } = {}) {
       if (!Number.isInteger(lineNumber) || lineNumber < 1 || lineNumber > view.state.doc.lines) {
         return false;
       }
       const line = view.state.doc.line(lineNumber);
       const to = lineNumber < view.state.doc.lines ? view.state.doc.line(lineNumber + 1).from : line.to;
-      view.dispatch({
+      view.dispatch(preserveEditorContext({
         changes: { from: line.from, to },
-        scrollIntoView: true
-      });
+        scrollIntoView: !preserveSelection
+      }, preserveSelection));
       return true;
     },
     destroy() {
@@ -38899,6 +39767,7 @@ function createSourceEditor({
       tableInteraction.commitEditor();
       tableInteraction.destroy();
       componentInteraction.destroy();
+      textSelectionInteraction.destroy();
       view.dom.removeEventListener("pointerdown", componentInteraction.handlePointerDown, true);
       view.dom.removeEventListener("pointerdown", tableInteraction.handlePointerDown, true);
       view.dom.removeEventListener("pointermove", tableInteraction.handlePointerMove, true);
@@ -38926,11 +39795,51 @@ function createSourceEditor({
       );
       view.dom.removeEventListener("keydown", tableInteraction.handleKeyDown, true);
       view.dom.removeEventListener("mousedown", handleMouseDown, true);
+      view.dom.removeEventListener("click", handleClick, true);
       view.scrollDOM.removeEventListener("scroll", handleScroll);
       globalThis.removeEventListener?.("resize", tableInteraction.refreshPositions);
       globalThis.removeEventListener?.("resize", componentInteraction.refreshPositions);
+      globalThis.removeEventListener?.(
+        "resize",
+        textSelectionInteraction.refreshPositions
+      );
       view.destroy();
     }
+  };
+}
+function dispatchEditorTransactions(transactions, view) {
+  if (!editorTransactionsPreserveContext(transactions)) {
+    view.update(transactions);
+    return;
+  }
+  let scrollSnapshot = view.scrollSnapshot();
+  for (const transaction of transactions) {
+    scrollSnapshot = scrollSnapshot?.map(transaction.changes);
+  }
+  const finalState = transactions.at(-1)?.state;
+  if (!scrollSnapshot || !finalState) {
+    view.update(transactions);
+    return;
+  }
+  view.update([
+    ...transactions,
+    finalState.update({ effects: scrollSnapshot })
+  ]);
+}
+function editorTransactionsPreserveContext(transactions = []) {
+  return transactions.some((transaction) => transaction.annotation(preserveEditorContextAnnotation) === true || transaction.isUserEvent("undo") || transaction.isUserEvent("redo"));
+}
+function preserveEditorContext(spec, preserve = true) {
+  if (!preserve) {
+    return spec;
+  }
+  const annotations = spec.annotations === void 0 ? [] : Array.isArray(spec.annotations) ? spec.annotations : [spec.annotations];
+  return {
+    ...spec,
+    annotations: [
+      ...annotations,
+      preserveEditorContextAnnotation.of(true)
+    ]
   };
 }
 function isVerticalTableColumnSelection(selection) {
@@ -39183,9 +40092,9 @@ function createLiveMdxComponentInteraction({
     if (nextSource === source) {
       return false;
     }
-    view.dispatch({
+    view.dispatch(preserveEditorContext({
       changes: { from: start.from, to: end.to, insert: nextSource }
-    });
+    }));
     scheduleRefresh();
     return true;
   };
@@ -39408,6 +40317,197 @@ function liveMdxTargetIsEmbeddedViewControl(target) {
     "[data-table-copy]"
   ].some((selector) => Boolean(closestElement(target, selector)));
 }
+function createLiveTextSelectionInteraction({
+  getView,
+  getMode,
+  isEditable,
+  locale,
+  documentRoot = globalThis.document,
+  onSelect = () => {
+  }
+}) {
+  const translate = createTranslator(SOURCE_EDITOR_TABLE_MESSAGES, locale);
+  const toolbar = createLiveTextFormatToolbar(documentRoot, translate);
+  let refreshHandle = null;
+  let selectionActive = false;
+  const currentFormatState = () => {
+    const view = getView();
+    if (!view || getMode() !== "live" || !isEditable() || !view.hasFocus) {
+      return null;
+    }
+    return markdownTextSelectionFormatState(
+      view.state.doc.toString(),
+      view.state.selection.main
+    );
+  };
+  const refreshNow = () => {
+    const view = getView();
+    const state = currentFormatState();
+    if (!view || !state) {
+      selectionActive = false;
+      toolbar.hidden = true;
+      closeLiveTableToolbarMenus(toolbar);
+      return;
+    }
+    if (!selectionActive) {
+      selectionActive = true;
+      onSelect(state.selection);
+    }
+    updateLiveTableToolbar(toolbar, state);
+    toolbar.hidden = false;
+    const anchorRect = liveTextSelectionAnchorRect(view);
+    if (!anchorRect) {
+      toolbar.hidden = true;
+      return;
+    }
+    positionFloatingControl(toolbar, anchorRect, {
+      placement: "above",
+      offset: 10,
+      documentRoot
+    });
+  };
+  const scheduleRefresh = () => {
+    if (refreshHandle !== null) {
+      return;
+    }
+    const schedule = globalThis.requestAnimationFrame ?? ((callback) => globalThis.setTimeout(callback, 0));
+    refreshHandle = schedule(() => {
+      refreshHandle = null;
+      refreshNow();
+    });
+  };
+  const applyPatch = (patch) => {
+    const view = getView();
+    if (!view || !currentFormatState()) {
+      return false;
+    }
+    const result = formatMarkdownTextSelection(
+      view.state.doc.toString(),
+      view.state.selection.main,
+      patch
+    );
+    if (!result) {
+      return false;
+    }
+    closeLiveTableToolbarMenus(toolbar);
+    if (result.changed) {
+      view.dispatch(preserveEditorContext({
+        changes: result.changes,
+        selection: result.selection
+      }));
+    } else {
+      scheduleRefresh();
+    }
+    view.focus();
+    return true;
+  };
+  const applyTextStyle = (style) => {
+    const state = currentFormatState();
+    if (!state || !["bold", "italic", "underline", "strikethrough"].includes(style)) {
+      return false;
+    }
+    return applyPatch({ [style]: state[style] !== true });
+  };
+  const clearSelection = () => {
+    const view = getView();
+    closeLiveTableToolbarMenus(toolbar);
+    toolbar.hidden = true;
+    selectionActive = false;
+    if (!view || view.state.selection.main.empty) {
+      return false;
+    }
+    view.dispatch(preserveEditorContext({
+      selection: { anchor: view.state.selection.main.head }
+    }));
+    return true;
+  };
+  const handleToolbarClick = (event) => {
+    const closeButton = closestElement(
+      event.target,
+      "[data-live-text-toolbar-close]"
+    );
+    const menuButton = closestElement(
+      event.target,
+      "[data-live-table-menu-toggle]"
+    );
+    const formatButton = closestElement(
+      event.target,
+      "[data-live-table-format-action]"
+    );
+    const colorButton = closestElement(
+      event.target,
+      "[data-live-table-color-action]"
+    );
+    const highlightButton = closestElement(
+      event.target,
+      "[data-live-table-highlight-action]"
+    );
+    if (!closeButton && !menuButton && !formatButton && !colorButton && !highlightButton) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (closeButton) {
+      clearSelection();
+      return;
+    }
+    if (menuButton) {
+      toggleLiveFormatToolbarMenu(menuButton);
+      return;
+    }
+    if (formatButton) {
+      const action2 = formatButton.dataset.liveTableFormatAction;
+      if (action2 === "clear") {
+        applyPatch({
+          bold: false,
+          italic: false,
+          underline: false,
+          strikethrough: false,
+          color: null,
+          backgroundColor: null
+        });
+      } else {
+        applyTextStyle(action2);
+      }
+      return;
+    }
+    if (colorButton) {
+      const action2 = colorButton.dataset.liveTableColorAction;
+      applyPatch({ color: action2 === "clear" ? null : action2 });
+      return;
+    }
+    const action = highlightButton.dataset.liveTableHighlightAction;
+    applyPatch({ backgroundColor: action === "clear" ? null : action });
+  };
+  const keepEditorSelection = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  toolbar.addEventListener("pointerdown", keepEditorSelection);
+  toolbar.addEventListener("mousedown", keepEditorSelection);
+  toolbar.addEventListener("click", handleToolbarClick);
+  (documentRoot?.body ?? documentRoot?.documentElement)?.append(toolbar);
+  const destroy = () => {
+    if (refreshHandle !== null) {
+      const cancel = globalThis.cancelAnimationFrame ?? globalThis.clearTimeout;
+      cancel?.(refreshHandle);
+      refreshHandle = null;
+    }
+    toolbar.removeEventListener("pointerdown", keepEditorSelection);
+    toolbar.removeEventListener("mousedown", keepEditorSelection);
+    toolbar.removeEventListener("click", handleToolbarClick);
+    toolbar.remove();
+    selectionActive = false;
+  };
+  return {
+    handleUpdate: scheduleRefresh,
+    refreshPositions: scheduleRefresh,
+    hasSelection: () => Boolean(currentFormatState()),
+    clearSelection,
+    applyTextStyle,
+    destroy
+  };
+}
 function createLiveTableInteraction({
   getView,
   getMode,
@@ -39462,13 +40562,13 @@ function createLiveTableInteraction({
       scheduleRefresh();
       return false;
     }
-    view.dispatch({
+    view.dispatch(preserveEditorContext({
       changes: {
         from: block2.from,
         to: block2.to,
         insert: nextSource
       }
-    });
+    }));
     scheduleRefresh();
     return true;
   };
@@ -40175,6 +41275,7 @@ function createLiveTableInteraction({
     refreshPositions,
     hasSelection: () => Boolean(selection),
     clearSelection,
+    applyTextStyle,
     commitEditor,
     cancelEditor,
     destroy
@@ -40212,10 +41313,10 @@ function prepareLiveTablePreview(container, block2, translate) {
   toolbar.setAttribute("role", "toolbar");
   toolbar.setAttribute("aria-label", translate("toolbar.label"));
   toolbar.hidden = true;
-  for (const style of ["bold", "italic", "strikethrough"]) {
+  for (const style of ["bold", "italic", "underline", "strikethrough"]) {
     const button = createLiveTableToolbarButton(
       translate(`format.${style}`),
-      style === "bold" ? "B" : style === "italic" ? "I" : "S",
+      style === "bold" ? "B" : style === "italic" ? "I" : style === "underline" ? "U" : "S",
       `is-${style}`
     );
     button.dataset.liveTableFormatAction = style;
@@ -40277,8 +41378,69 @@ function prepareLiveTablePreview(container, block2, translate) {
   container.append(toolbar, columnHandle);
   return true;
 }
-function createLiveTableToolbarButton(label, text2 = "", modifier = "") {
-  const button = document.createElement("button");
+function createLiveTextFormatToolbar(documentRoot, translate) {
+  const toolbar = documentRoot.createElement("div");
+  toolbar.className = [
+    "live-edit-toolbar",
+    "cm-live-table-format-toolbar",
+    "cm-live-table-color-toolbar",
+    "cm-live-text-format-toolbar"
+  ].join(" ");
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", translate("textToolbar.label"));
+  toolbar.hidden = true;
+  for (const style of ["bold", "italic", "underline", "strikethrough"]) {
+    const button = createLiveTableToolbarButton(
+      translate(`format.${style}`),
+      style === "bold" ? "B" : style === "italic" ? "I" : style === "underline" ? "U" : "S",
+      `is-${style}`,
+      documentRoot
+    );
+    button.dataset.liveTableFormatAction = style;
+    button.setAttribute("aria-pressed", "false");
+    toolbar.append(button);
+  }
+  toolbar.append(createLiveTableToolbarSeparator(documentRoot));
+  toolbar.append(
+    createLiveTablePaletteControl({
+      kind: "text-color",
+      label: translate("palette.textColor"),
+      clearLabel: translate("color.clear"),
+      palette: MARKDOWN_TABLE_TEXT_COLORS,
+      translateColor: (name2) => translate(`color.${name2}`),
+      documentRoot
+    }),
+    createLiveTablePaletteControl({
+      kind: "highlight",
+      label: translate("palette.highlight"),
+      clearLabel: translate("highlight.clear"),
+      palette: MARKDOWN_TABLE_HIGHLIGHT_COLORS,
+      translateColor: (name2) => translate(`highlight.${name2}`),
+      documentRoot
+    })
+  );
+  toolbar.append(createLiveTableToolbarSeparator(documentRoot));
+  const clearButton = createLiveTableToolbarButton(
+    translate("format.clear"),
+    "Tx",
+    "is-clear-format",
+    documentRoot
+  );
+  clearButton.dataset.liveTableFormatAction = "clear";
+  toolbar.append(clearButton);
+  const closeButton = createLiveTableToolbarButton(
+    translate("textToolbar.close"),
+    "\xD7",
+    "cm-live-table-toolbar-close",
+    documentRoot
+  );
+  closeButton.dataset.liveTextToolbarClose = "true";
+  closeButton.classList.add("live-edit-toolbar-close");
+  toolbar.append(closeButton);
+  return toolbar;
+}
+function createLiveTableToolbarButton(label, text2 = "", modifier = "", documentRoot = globalThis.document) {
+  const button = documentRoot.createElement("button");
   button.type = "button";
   button.className = "live-edit-toolbar-button cm-live-table-format-button";
   if (modifier) {
@@ -40287,7 +41449,7 @@ function createLiveTableToolbarButton(label, text2 = "", modifier = "") {
   button.setAttribute("aria-label", label);
   button.title = label;
   if (text2) {
-    const symbol = document.createElement("span");
+    const symbol = documentRoot.createElement("span");
     symbol.className = "cm-live-table-format-symbol";
     symbol.setAttribute("aria-hidden", "true");
     symbol.textContent = text2;
@@ -40295,8 +41457,8 @@ function createLiveTableToolbarButton(label, text2 = "", modifier = "") {
   }
   return button;
 }
-function createLiveTableToolbarSeparator() {
-  const separator = document.createElement("span");
+function createLiveTableToolbarSeparator(documentRoot = globalThis.document) {
+  const separator = documentRoot.createElement("span");
   separator.className = "live-edit-toolbar-separator cm-live-table-format-separator";
   separator.setAttribute("aria-hidden", "true");
   return separator;
@@ -40306,32 +41468,33 @@ function createLiveTablePaletteControl({
   label,
   clearLabel,
   palette,
-  translateColor
+  translateColor,
+  documentRoot = globalThis.document
 }) {
-  const wrapper = document.createElement("span");
+  const wrapper = documentRoot.createElement("span");
   wrapper.className = "cm-live-table-palette-control";
-  const trigger = createLiveTableToolbarButton(label);
+  const trigger = createLiveTableToolbarButton(label, "", "", documentRoot);
   trigger.classList.add("cm-live-table-palette-trigger", `is-${kind}`);
   trigger.dataset.liveTableMenuToggle = kind;
   trigger.setAttribute("aria-haspopup", "menu");
   trigger.setAttribute("aria-expanded", "false");
-  const symbol = document.createElement("span");
+  const symbol = documentRoot.createElement("span");
   symbol.className = "cm-live-table-palette-symbol";
   symbol.setAttribute("aria-hidden", "true");
   symbol.textContent = "A";
-  const chevron = document.createElement("span");
+  const chevron = documentRoot.createElement("span");
   chevron.className = "cm-live-table-palette-chevron";
   chevron.setAttribute("aria-hidden", "true");
   chevron.textContent = "\u25BE";
   trigger.append(symbol, chevron);
-  const menu = document.createElement("span");
+  const menu = documentRoot.createElement("span");
   menu.className = `cm-live-table-palette is-${kind}`;
   menu.dataset.liveTablePalette = kind;
   menu.setAttribute("role", "menu");
   menu.setAttribute("aria-label", label);
   menu.hidden = true;
   for (const color of palette) {
-    const button = document.createElement("button");
+    const button = documentRoot.createElement("button");
     button.type = "button";
     button.className = "cm-live-table-swatch-button";
     if (kind === "text-color") {
@@ -40346,7 +41509,7 @@ function createLiveTablePaletteControl({
     button.title = translateColor(color.name);
     menu.append(button);
   }
-  const clearButton = document.createElement("button");
+  const clearButton = documentRoot.createElement("button");
   clearButton.type = "button";
   clearButton.className = "cm-live-table-swatch-button cm-live-table-swatch-clear";
   if (kind === "text-color") {
@@ -40385,6 +41548,24 @@ function closeLiveTableToolbarMenus(root) {
   ) ?? []) {
     trigger.setAttribute("aria-expanded", "false");
   }
+}
+function toggleLiveFormatToolbarMenu(button) {
+  const toolbar = button?.closest?.(".cm-live-table-format-toolbar");
+  const menuName = button?.dataset?.liveTableMenuToggle;
+  const menu = toolbar?.querySelector(
+    `[data-live-table-palette="${menuName}"]`
+  );
+  if (!toolbar || !menu) {
+    return false;
+  }
+  const shouldOpen = menu.hidden;
+  closeLiveTableToolbarMenus(toolbar);
+  if (shouldOpen) {
+    menu.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    positionLiveTablePalette(menu);
+  }
+  return true;
 }
 function positionLiveTablePalette(menu) {
   menu.classList.remove("opens-below");
@@ -40478,6 +41659,45 @@ function positionFloatingControl(element, anchorRect, {
   element.style.left = `${Math.round(left)}px`;
   element.style.top = `${Math.round(top2)}px`;
   element.style.visibility = "";
+}
+function liveTextSelectionAnchorRect(view) {
+  const viewport = view?.scrollDOM?.getBoundingClientRect?.();
+  const rects = [
+    ...view?.dom?.querySelectorAll?.(".cm-selectionBackground") ?? []
+  ].map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0 && (!viewport || rect.bottom >= viewport.top && rect.top <= viewport.bottom));
+  if (rects.length > 0) {
+    const top3 = Math.min(...rects.map((rect) => rect.top));
+    const firstRow = rects.filter((rect) => Math.abs(rect.top - top3) < 3);
+    const left2 = Math.min(...firstRow.map((rect) => rect.left));
+    const right2 = Math.max(...firstRow.map((rect) => rect.right));
+    const bottom2 = Math.max(...firstRow.map((rect) => rect.bottom));
+    return {
+      left: left2,
+      right: right2,
+      top: top3,
+      bottom: bottom2,
+      width: Math.max(1, right2 - left2),
+      height: Math.max(1, bottom2 - top3)
+    };
+  }
+  const range = view?.state?.selection?.main;
+  const start = range ? view.coordsAtPos(range.from) : null;
+  const end = range ? view.coordsAtPos(range.to) : null;
+  if (!start && !end) {
+    return null;
+  }
+  const left = Math.min(start?.left ?? end.left, end?.left ?? start.left);
+  const right = Math.max(start?.right ?? end.right, end?.right ?? start.right);
+  const top2 = Math.min(start?.top ?? end.top, end?.top ?? start.top);
+  const bottom = Math.max(start?.bottom ?? end.bottom, end?.bottom ?? start.bottom);
+  return {
+    left,
+    right,
+    top: top2,
+    bottom,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top2)
+  };
 }
 function minimalDocumentChange(currentValue, nextValue) {
   const current = String(currentValue ?? "");
@@ -40908,6 +42128,12 @@ function nextLiveEditingSuppression(isSuppressed, {
   }
   return isSuppressed;
 }
+function liveMarkdownSelectionPresentation(state, suppressActiveLine = false) {
+  if (!state || suppressActiveLine || !state.selection.main.empty) {
+    return null;
+  }
+  return state.doc.lineAt(state.selection.main.head).number;
+}
 function listItemIndentChange(text2, direction, { step = 2 } = {}) {
   const match2 = /^(\s*)([-*+]|\d+\.)(?:\s+|$)/.exec(text2);
   if (!match2) {
@@ -40942,7 +42168,10 @@ function buildLiveMarkdownDecorations(state, { suppressActiveLine = false } = {}
   let inFrontmatter = false;
   let inCodeBlock = false;
   let mdxComponentName = null;
-  const activeLineNumber = suppressActiveLine ? null : state.doc.lineAt(state.selection.main.head).number;
+  const activeLineNumber = liveMarkdownSelectionPresentation(
+    state,
+    suppressActiveLine
+  );
   const previewBlocks = livePreviewBlocksForSource(state.doc.toString(), {
     activeLineNumber
   });
@@ -41204,11 +42433,47 @@ function liveInlineRangesForLine(text2) {
   });
   addDelimitedRanges({
     text: text2,
+    regex: /~~([^~]+)~~/g,
+    delimiterLength: 2,
+    contentClassName: "cm-live-strikethrough",
+    ranges
+  });
+  addDelimitedRanges({
+    text: text2,
+    regex: /(?<!_)_([^_\n]+)_(?!_)/g,
+    delimiterLength: 1,
+    contentClassName: "cm-live-emphasis",
+    ranges
+  });
+  addDelimitedRanges({
+    text: text2,
+    regex: /(?<!\*)\*([^*\n]+)\*(?!\*)/g,
+    delimiterLength: 1,
+    contentClassName: "cm-live-emphasis",
+    ranges
+  });
+  addDelimitedRanges({
+    text: text2,
     regex: /`([^`]+)`/g,
     delimiterLength: 1,
     contentClassName: "cm-live-inline-code",
     ranges
   });
+  for (const span of controlledMarkdownStyleSpansForLine(text2)) {
+    const declarations = [
+      span.color ? `color: ${span.color}` : "",
+      span.backgroundColor ? `background-color: ${span.backgroundColor}` : "",
+      span.underline ? "text-decoration: underline" : ""
+    ].filter(Boolean);
+    push(span.from, span.contentFrom, "cm-live-marker");
+    push(
+      span.contentFrom,
+      span.contentTo,
+      "cm-live-controlled-style",
+      { style: declarations.join("; ") }
+    );
+    push(span.contentTo, span.to, "cm-live-marker");
+  }
   for (const link2 of liveMarkdownLinksForLine(text2)) {
     push(link2.from, link2.textFrom, "cm-live-marker");
     push(link2.textFrom, link2.textTo, "cm-live-link-text", {
@@ -41489,7 +42754,7 @@ function liveVisualRangesForLine(text2, { isActiveLine = false } = {}) {
     ...range
   }));
   const allReplacements = [...readableReplacements, ...inlineMarkerReplacements];
-  const visibleInlineRanges = liveInlineRangesForLine(text2).filter((range) => !allReplacements.some((replacement) => rangesOverlap(range, replacement))).map((range) => ({
+  const visibleInlineRanges = liveInlineRangesForLine(text2).flatMap((range) => subtractReplacementRanges(range, allReplacements)).map((range) => ({
     type: "mark",
     ...range
   }));
@@ -41497,6 +42762,25 @@ function liveVisualRangesForLine(text2, { isActiveLine = false } = {}) {
 }
 function rangesOverlap(left, right) {
   return left.from < right.to && right.from < left.to;
+}
+function subtractReplacementRanges(range, replacements) {
+  let segments = [{ ...range }];
+  for (const replacement of replacements) {
+    segments = segments.flatMap((segment) => {
+      if (!rangesOverlap(segment, replacement)) {
+        return [segment];
+      }
+      const next = [];
+      if (segment.from < replacement.from) {
+        next.push({ ...segment, to: replacement.from });
+      }
+      if (replacement.to < segment.to) {
+        next.push({ ...segment, from: replacement.to });
+      }
+      return next;
+    });
+  }
+  return segments.filter((segment) => segment.to > segment.from);
 }
 function liveReadableReplacementsForLine(text2) {
   const ranges = [];
@@ -41654,12 +42938,16 @@ export {
   closestElement,
   createLiveMdxComponentInteraction,
   createLiveTableInteraction,
+  createLiveTextSelectionInteraction,
   createSourceEditor,
+  dispatchEditorTransactions,
+  editorTransactionsPreserveContext,
   imageLineAttributes,
   imageLineForAction,
   isLiveBlankClick,
   isMarkdownDocumentPath,
   isVerticalTableColumnSelection,
+  keyboardTextStyleFromEvent,
   listItemIndentChange,
   liveBlockPreviewIgnoresEvent,
   liveClassForLine,
@@ -41669,6 +42957,7 @@ export {
   liveInlineRangesForLine,
   liveMarkdownLinkAtPosition,
   liveMarkdownLinksForLine,
+  liveMarkdownSelectionPresentation,
   liveMdxComponentForLine,
   liveMdxTargetIsEmbeddedViewControl,
   liveMdxToolbarControlDefinitions,
@@ -41683,6 +42972,7 @@ export {
   normalizeImageWidth2 as normalizeImageWidth,
   pastedImageInsertionText,
   pastedTextLinkCandidate,
+  preserveEditorContext,
   slashCommandCompletionSource,
   slashCommandTemplate,
   slashCommandsForLocale,

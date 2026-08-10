@@ -80,7 +80,6 @@ import {
   applySidebarFavoriteOperation,
   createSidebarFavoriteToggleQueue,
   isSidebarFavoriteEntry,
-  isToggleFavoriteShortcut,
   missingSidebarFavoritesFromTree,
   normalizeSidebarFavoriteScopes,
   normalizeSidebarFavorites,
@@ -126,7 +125,9 @@ import {
 } from "./workbench-session.js";
 import {
   getKeyboardShortcutGroups,
-  isKeyboardShortcutsHelpShortcut,
+  keyboardShortcutBinding,
+  keyboardShortcutDisplay,
+  keyboardShortcutMatches,
 } from "./keyboard-shortcuts.js";
 import {
   findTextRanges,
@@ -324,6 +325,7 @@ const state = {
   fileTreeMode: initialUserPreferences.fileTreeMode,
   showDocumentTitles: initialUserPreferences.showDocumentTitles,
   gitRemoteCheckIntervalMinutes: initialUserPreferences.gitRemoteCheckIntervalMinutes,
+  keyboardShortcuts: initialUserPreferences.keyboardShortcuts,
   sidebarTab: "all",
   sidebarFavorites: [],
   sidebarFavoritesAvailable: false,
@@ -3282,8 +3284,9 @@ function updateDocumentFavoriteToggle() {
   const active = Boolean(path) && isMarkdownDocument() && isFavoriteItem("document", path);
   const label = active ? t("action.removeFavorite") : t("action.addFavorite");
   documentFavoriteToggle.setAttribute("aria-pressed", String(active));
-  documentFavoriteToggle.setAttribute("aria-label", shortcutTooltip(label, "Command+D"));
-  setShortcutTooltip(documentFavoriteToggle, label, "Command+D");
+  const shortcut = configuredShortcutLabel("document.favorite");
+  documentFavoriteToggle.setAttribute("aria-label", shortcutTooltip(label, shortcut));
+  setShortcutTooltip(documentFavoriteToggle, label, shortcut);
 }
 
 function ensureSourceEditor() {
@@ -3310,6 +3313,7 @@ function ensureSourceEditor() {
     getDocumentPath: () => state.currentDocument?.path ?? "",
     getRenderOptions: () => documentRenderOptions(),
     onBeforeSlashCommand: ensureSlashCommandAllowed,
+    getKeyboardShortcuts: () => state.keyboardShortcuts,
   });
 }
 
@@ -3399,6 +3403,8 @@ function handleDesktopPreferencesEvent(event) {
   state.desktopPreferences = { ...preferences };
   applyAppearancePreferences(preferences);
   state.gitRemoteCheckIntervalMinutes = normalizedPreferences.gitRemoteCheckIntervalMinutes;
+  state.keyboardShortcuts = normalizedPreferences.keyboardShortcuts;
+  applyShortcutTooltips();
   if (shouldRebuildFileTree) {
     renderTree();
   }
@@ -3439,9 +3445,16 @@ function handleSystemColorSchemeChange() {
 }
 
 function applyShortcutTooltips() {
-  setShortcutTooltip(sidebarToggle, t("action.collapseSidebar"), "Command+B");
-  setShortcutTooltip(repositoryPanelToggle, t("repository.openPanel"), "Command+O");
-  repositoryPanelToggle?.setAttribute("aria-keyshortcuts", "Meta+O Control+O");
+  setShortcutTooltip(
+    sidebarToggle,
+    t("action.collapseSidebar"),
+    configuredShortcutLabel("navigation.toggle-sidebar"),
+  );
+  setShortcutTooltip(
+    repositoryPanelToggle,
+    t("repository.openPanel"),
+    configuredShortcutLabel("repository.open"),
+  );
   repositoryPanelOpen.querySelector("kbd").textContent = platformShortcutLabel("Command+0");
   for (const [index, sidebarTab] of SIDEBAR_TABS.entries()) {
     const button = sidebarTabButtons.find(
@@ -3451,21 +3464,29 @@ function applyShortcutTooltips() {
     setShortcutTooltip(button, t(`sidebar.${sidebarTab}`), shortcut);
     button?.setAttribute("aria-keyshortcuts", `Alt+${index + 1}`);
   }
-  setShortcutTooltip(historyBackButton, t("action.back"), "Command+[");
-  setShortcutTooltip(historyForwardButton, t("action.forward"), "Command+]");
+  setShortcutTooltip(historyBackButton, t("action.back"), configuredShortcutLabel("navigation.back"));
+  setShortcutTooltip(historyForwardButton, t("action.forward"), configuredShortcutLabel("navigation.forward"));
   setUiTooltip(documentNewButton, t("action.newDocument"));
-  setShortcutButtonLabel(copyShareLinkButton, t("action.copyShareLink"), "Command+Shift+L");
+  setShortcutButtonLabel(
+    copyShareLinkButton,
+    t("action.copyShareLink"),
+    configuredShortcutLabel("document.copy-share"),
+  );
   updateDocumentFavoriteToggle();
-  setShortcutButtonLabel(document.querySelector("#mode-preview"), "Preview", "Command+P");
-  setShortcutButtonLabel(document.querySelector("#mode-source"), "Source", "Command+S");
-  setShortcutButtonLabel(document.querySelector("#mode-live"), "Live", "Command+L");
-  setShortcutTooltip(treeFilter, t("search.filesTooltip"), "Command+K");
+  setShortcutButtonLabel(document.querySelector("#mode-preview"), "Preview", configuredShortcutLabel("view.preview"));
+  setShortcutButtonLabel(document.querySelector("#mode-source"), "Source", configuredShortcutLabel("view.source"));
+  setShortcutButtonLabel(document.querySelector("#mode-live"), "Live", configuredShortcutLabel("view.live"));
+  setShortcutTooltip(treeFilter, t("search.filesTooltip"), configuredShortcutLabel("navigation.focus-search"));
   setShortcutTooltip(documentSearchPrevious, t("action.previousMatch"), "Shift+Enter");
   setShortcutTooltip(documentSearchNext, t("action.nextMatch"), "Enter");
   setShortcutTooltip(documentSearchClose, t("action.closeSearch"), "Escape");
   treeFilter.placeholder = t("search.short", {
-    shortcut: platformShortcutLabel("Command+K"),
+    shortcut: platformShortcutLabel(configuredShortcutLabel("navigation.focus-search")),
   });
+}
+
+function configuredShortcutLabel(id) {
+  return keyboardShortcutDisplay(keyboardShortcutBinding(id, state.keyboardShortcuts));
 }
 
 function setShortcutButtonLabel(element, label, shortcut) {
@@ -3524,7 +3545,8 @@ function setShortcutTooltip(element, label, shortcut, options = {}) {
 }
 
 function shortcutTooltip(label, shortcut) {
-  return `${label} (${platformShortcutLabel(shortcut)})`;
+  const normalized = platformShortcutLabel(shortcut);
+  return normalized ? `${label} (${normalized})` : label;
 }
 
 function platformShortcutLabel(shortcut) {
@@ -5537,10 +5559,11 @@ function setDocumentOutlineCollapsed(collapsed, { persist = true } = {}) {
   const label = state.documentOutlineCollapsed
     ? t("action.showOutline")
     : t("action.hideOutline");
-  setShortcutTooltip(documentOutlineToggle, label, "Command+Shift+B");
+  const shortcut = configuredShortcutLabel("navigation.toggle-outline");
+  setShortcutTooltip(documentOutlineToggle, label, shortcut);
   documentOutlineToggle.setAttribute(
     "aria-label",
-    shortcutTooltip(label, "Command+Shift+B"),
+    shortcutTooltip(label, shortcut),
   );
   documentOutlineResizer.tabIndex = state.documentOutlineCollapsed ? -1 : 0;
   uiTooltipController.hide();
@@ -5570,8 +5593,9 @@ function setSidebarCollapsed(collapsed, { persist = true } = {}) {
   appShell.classList.toggle("is-sidebar-collapsed", state.sidebarCollapsed);
   sidebarToggle.setAttribute("aria-expanded", String(!state.sidebarCollapsed));
   const label = state.sidebarCollapsed ? t("action.expandSidebar") : t("action.collapseSidebar");
-  setShortcutTooltip(sidebarToggle, label, "Command+B");
-  sidebarToggle.setAttribute("aria-label", shortcutTooltip(label, "Command+B"));
+  const shortcut = configuredShortcutLabel("navigation.toggle-sidebar");
+  setShortcutTooltip(sidebarToggle, label, shortcut);
+  sidebarToggle.setAttribute("aria-label", shortcutTooltip(label, shortcut));
   sidebarResizer.tabIndex = state.sidebarCollapsed ? -1 : 0;
 
   if (state.sidebarCollapsed) {
@@ -6834,7 +6858,10 @@ function handleAppDialogKeydown(event) {
 }
 
 function handleAppShortcutKeydown(event) {
-  if (event.target.closest?.("#app-dialog, #git-sync-panel, #repository-panel")) {
+  if (
+    event.defaultPrevented
+    || event.target.closest?.("#app-dialog, #git-sync-panel, #repository-panel")
+  ) {
     return;
   }
 
@@ -6870,10 +6897,6 @@ function shortcutActionFromKeyboardEvent(event) {
     return { command: "switch-sidebar-tab", tab: sidebarTab };
   }
 
-  if (event.altKey) {
-    return null;
-  }
-
   if (event.metaKey && event.shiftKey && event.code === "BracketLeft") {
     return { command: "previous-tab" };
   }
@@ -6886,91 +6909,74 @@ function shortcutActionFromKeyboardEvent(event) {
     return { command: event.shiftKey ? "previous-tab" : "next-tab" };
   }
 
-  if (!event.shiftKey && isPrimaryShortcut(event) && event.code === "BracketLeft") {
-    return { command: "history-back" };
-  }
-
-  if (!event.shiftKey && isPrimaryShortcut(event) && event.code === "BracketRight") {
-    return { command: "history-forward" };
-  }
-
-  if (!isPrimaryShortcut(event)) {
-    return null;
-  }
-
-  if (isToggleFavoriteShortcut(event)) {
-    return { command: "toggle-favorite" };
-  }
-
-  if (!event.shiftKey && key === "b") {
-    return { command: "toggle-sidebar" };
-  }
-
-  if (event.shiftKey && key === "b") {
-    return { command: "toggle-document-outline" };
-  }
-
-  if (event.shiftKey && key === "c") {
-    return { command: "copy-document-path" };
-  }
-
-  if (event.shiftKey && key === "l") {
-    return { command: "copy-document-share-link" };
-  }
-
-  if (event.shiftKey && key === "g") {
-    return { command: "open-document-github" };
-  }
-
-  if (event.shiftKey && key === "o") {
-    return { command: "open-document-source" };
-  }
-
-  if (event.shiftKey && key === "r") {
-    return { command: "reveal-file-manager" };
-  }
-
-  if (event.shiftKey && key === "e") {
-    return { command: "focus-file-tree" };
-  }
-
-  if (!event.shiftKey && (event.key === "w" || event.key === "W")) {
-    return { command: "close-current-tab" };
-  }
-
-  if (!event.shiftKey && /^[1-8]$/.test(key)) {
+  if (!event.altKey && !event.shiftKey && isPrimaryShortcut(event) && /^[1-8]$/.test(key)) {
     return { command: "switch-tab-at-index", index: Number(key) - 1 };
   }
 
-  if (!event.shiftKey && key === "9") {
+  if (!event.altKey && !event.shiftKey && isPrimaryShortcut(event) && key === "9") {
     return { command: "switch-last-tab" };
   }
 
-  if (!event.shiftKey && key === "p") {
+  if (appShortcutMatches(event, "navigation.back")) {
+    return { command: "history-back" };
+  }
+  if (appShortcutMatches(event, "navigation.forward")) {
+    return { command: "history-forward" };
+  }
+  if (appShortcutMatches(event, "document.favorite")) {
+    return { command: "toggle-favorite" };
+  }
+  if (appShortcutMatches(event, "navigation.toggle-sidebar")) {
+    return { command: "toggle-sidebar" };
+  }
+  if (appShortcutMatches(event, "navigation.toggle-outline")) {
+    return { command: "toggle-document-outline" };
+  }
+  if (appShortcutMatches(event, "document.copy-path")) {
+    return { command: "copy-document-path" };
+  }
+  if (appShortcutMatches(event, "document.copy-share")) {
+    return { command: "copy-document-share-link" };
+  }
+  if (appShortcutMatches(event, "document.open-github")) {
+    return { command: "open-document-github" };
+  }
+  if (appShortcutMatches(event, "document.open-source")) {
+    return { command: "open-document-source" };
+  }
+  if (appShortcutMatches(event, "document.reveal")) {
+    return { command: "reveal-file-manager" };
+  }
+  if (appShortcutMatches(event, "navigation.focus-tree")) {
+    return { command: "focus-file-tree" };
+  }
+  if (appShortcutMatches(event, "document.close-tab")) {
+    return { command: "close-current-tab" };
+  }
+  if (appShortcutMatches(event, "view.preview")) {
     return { command: "set-mode", mode: "preview" };
   }
-
-  if (!event.shiftKey && key === "s") {
+  if (appShortcutMatches(event, "view.source")) {
     return { command: "set-mode", mode: "source" };
   }
-
-  if (!event.shiftKey && key === "l") {
+  if (appShortcutMatches(event, "view.live")) {
     return { command: "set-mode", mode: "live" };
   }
-
-  if (!event.shiftKey && key === "k") {
+  if (appShortcutMatches(event, "navigation.focus-search")) {
     return { command: "focus-file-search" };
   }
-
-  if (!event.shiftKey && key === "f") {
+  if (appShortcutMatches(event, "document.find")) {
     return { command: "find-in-document" };
   }
-
-  if (isKeyboardShortcutsHelpShortcut(event)) {
+  if (appShortcutMatches(event, "help.shortcuts")) {
     return { command: "show-keyboard-shortcuts" };
   }
 
   return null;
+}
+
+function appShortcutMatches(event, id) {
+  return keyboardShortcutMatches(event, id, state.keyboardShortcuts);
 }
 
 async function runAppShortcut(action) {
@@ -7822,7 +7828,9 @@ function renderKeyboardShortcutsDialog() {
   intro.textContent = t("help.shortcutsNote");
   root.append(intro);
 
-  for (const group of getKeyboardShortcutGroups(state.locale)) {
+  for (const group of getKeyboardShortcutGroups(state.locale, {
+    bindings: state.keyboardShortcuts,
+  })) {
     const section = document.createElement("section");
     section.className = "keyboard-shortcut-group";
 

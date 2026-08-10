@@ -145,9 +145,11 @@ import {
 } from "../../public/help-content.js";
 import {
   getKeyboardShortcutGroups,
-  isKeyboardShortcutsHelpShortcut,
+  keyboardShortcutAccelerator,
+  keyboardShortcutBinding,
+  keyboardShortcutMatches,
+  normalizeKeyboardShortcutOverrides,
 } from "../../public/keyboard-shortcuts.js";
-import { isToggleFavoriteShortcut } from "../../public/sidebar-favorites.js";
 import { sidebarTabFromShortcut } from "../../public/sidebar-navigation.js";
 
 applyDevelopmentUserDataOverride({ app });
@@ -524,6 +526,9 @@ async function recordTelemetryUpdateState(update) {
 
 async function saveDesktopPreferenceValues(preferences, { notifyRenderer = true } = {}) {
   const previousLanguage = currentDesktopTranslator().locale;
+  const previousShortcuts = normalizeKeyboardShortcutOverrides(
+    desktopRepositoryState.preferences?.keyboardShortcuts,
+  );
   const saved = await saveAndSyncDesktopPreferences({
     preferences,
     persistPreferences: (nextPreferences) => saveDesktopPreferences({
@@ -542,6 +547,11 @@ async function saveDesktopPreferenceValues(preferences, { notifyRenderer = true 
   });
   desktopRepositoryState = saved.state;
   const nextLanguage = currentDesktopTranslator().locale;
+  const shortcutsChanged = JSON.stringify(previousShortcuts) !== JSON.stringify(
+    normalizeKeyboardShortcutOverrides(
+      desktopRepositoryState.preferences?.keyboardShortcuts,
+    ),
+  );
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setBackgroundColor(desktopPageBackgroundColor(
       desktopRepositoryState.preferences ?? {},
@@ -565,6 +575,8 @@ async function saveDesktopPreferenceValues(preferences, { notifyRenderer = true 
     if (!activeServer && !isRepositoryTransitioning) {
       await reloadDesktopHomeForLanguage();
     }
+  } else if (shortcutsChanged) {
+    installMenu();
   }
   return saved.preferences;
 }
@@ -684,9 +696,12 @@ function installSettingsCenterController(browserWindow) {
     getPreferences: async () => desktopRepositoryState.preferences ?? {},
     savePreferences: saveDesktopPreferenceValues,
     getStatus: settingsCenterStatus,
-    getContent: async (resolvedLanguage) => ({
+    getContent: async (resolvedLanguage, preferences) => ({
       helpSections: settingsCenterHelpSections(resolvedLanguage),
-      shortcutGroups: getKeyboardShortcutGroups(resolvedLanguage),
+      shortcutGroups: getKeyboardShortcutGroups(resolvedLanguage, {
+        bindings: preferences?.keyboardShortcuts,
+        platform: process.platform,
+      }),
     }),
     getSystemDark: () => nativeTheme.shouldUseDarkColors,
     getSystemLanguages: () => preferredSystemLanguages(app),
@@ -898,6 +913,14 @@ function installSettingsViewShortcutBridge(webContents) {
   }
   settingsShortcutBridges.add(webContents);
   webContents.on("before-input-event", (event, input) => {
+    if (
+      settingsCenter?.shortcutCaptureActive
+      && (!input.type || input.type === "keyDown")
+    ) {
+      event.preventDefault();
+      settingsCenter.captureShortcutInput(input);
+      return;
+    }
     const shellAction = desktopShellShortcutFromInput(input);
     if (shellAction) {
       event.preventDefault();
@@ -924,6 +947,22 @@ function installSettingsViewShortcutBridge(webContents) {
   });
 }
 
+function desktopShortcutMatches(input, id) {
+  return keyboardShortcutMatches(
+    input,
+    id,
+    desktopRepositoryState.preferences?.keyboardShortcuts,
+    { platform: process.platform },
+  );
+}
+
+function desktopShortcutAccelerator(id) {
+  return keyboardShortcutAccelerator(keyboardShortcutBinding(
+    id,
+    desktopRepositoryState.preferences?.keyboardShortcuts,
+  ));
+}
+
 function desktopShellShortcutFromInput(input) {
   if (input.type && input.type !== "keyDown") {
     return null;
@@ -936,24 +975,13 @@ function desktopShellShortcutFromInput(input) {
   const meta = input.meta === true;
   const ctrl = input.control === true;
   const shift = input.shift === true;
-  const alt = input.alt === true;
-  if (alt) {
-    return null;
-  }
   if (!shift && settingsCenter?.visible && key === "escape") {
     return { command: "close-settings" };
   }
-  if (!shift && (meta || ctrl) && (key === "," || code === "Comma")) {
+  if (desktopShortcutMatches(input, "help.settings")) {
     return { command: "show-settings", section: "general" };
   }
-  if (isKeyboardShortcutsHelpShortcut({
-    key,
-    code,
-    metaKey: meta,
-    ctrlKey: ctrl,
-    shiftKey: shift,
-    altKey: alt,
-  })) {
+  if (desktopShortcutMatches(input, "help.shortcuts")) {
     return { command: "show-settings", section: "shortcuts" };
   }
   if (shift) {
@@ -997,7 +1025,7 @@ function desktopRepositoryShortcutFromInput(input) {
   const alt = input.alt === true;
   const digitMatch = /^Digit([1-9])$/.exec(code);
 
-  if (!alt && !shift && (meta || ctrl) && code === "KeyO") {
+  if (desktopShortcutMatches(input, "repository.open")) {
     return { command: "show-repository-panel" };
   }
   if (isRepositoryPanelOpen) {
@@ -1009,10 +1037,10 @@ function desktopRepositoryShortcutFromInput(input) {
       index: Number(digitMatch[1]) - 1,
     };
   }
-  if (alt && !shift && (meta || ctrl) && code === "ArrowLeft") {
+  if (desktopShortcutMatches(input, "repository.previous")) {
     return { command: "previous-repository" };
   }
-  if (alt && !shift && (meta || ctrl) && code === "ArrowRight") {
+  if (desktopShortcutMatches(input, "repository.next")) {
     return { command: "next-repository" };
   }
   return null;
@@ -1063,9 +1091,6 @@ function desktopShortcutActionFromInput(input) {
   if (sidebarTab) {
     return { command: "switch-sidebar-tab", tab: sidebarTab };
   }
-  if (alt) {
-    return null;
-  }
 
   if (meta && shift && code === "BracketLeft") {
     return { command: "previous-tab" };
@@ -1079,62 +1104,51 @@ function desktopShortcutActionFromInput(input) {
     return { command: shift ? "previous-tab" : "next-tab" };
   }
 
-  if (!shift && (meta || ctrl) && code === "BracketLeft") {
+  if (desktopShortcutMatches(input, "navigation.back")) {
     return { command: "history-back" };
   }
 
-  if (!shift && (meta || ctrl) && code === "BracketRight") {
+  if (desktopShortcutMatches(input, "navigation.forward")) {
     return { command: "history-forward" };
   }
 
-  if (!(meta || ctrl)) {
-    return null;
-  }
-
-  if (isToggleFavoriteShortcut({
-    key,
-    code,
-    metaKey: meta,
-    ctrlKey: ctrl,
-    shiftKey: shift,
-    altKey: alt,
-  })) {
+  if (desktopShortcutMatches(input, "document.favorite")) {
     return { command: "toggle-favorite" };
   }
 
-  if (!shift && key === "b") {
+  if (desktopShortcutMatches(input, "navigation.toggle-sidebar")) {
     return { command: "toggle-sidebar" };
   }
 
-  if (shift && key === "b") {
+  if (desktopShortcutMatches(input, "navigation.toggle-outline")) {
     return { command: "toggle-document-outline" };
   }
 
-  if (shift && key === "c") {
+  if (desktopShortcutMatches(input, "document.copy-path")) {
     return { command: "copy-document-path" };
   }
 
-  if (shift && key === "l") {
+  if (desktopShortcutMatches(input, "document.copy-share")) {
     return { command: "copy-document-share-link" };
   }
 
-  if (shift && key === "g") {
+  if (desktopShortcutMatches(input, "document.open-github")) {
     return { command: "open-document-github" };
   }
 
-  if (shift && key === "o") {
+  if (desktopShortcutMatches(input, "document.open-source")) {
     return { command: "open-document-source" };
   }
 
-  if (shift && key === "r") {
+  if (desktopShortcutMatches(input, "document.reveal")) {
     return { command: "reveal-file-manager" };
   }
 
-  if (shift && key === "e") {
+  if (desktopShortcutMatches(input, "navigation.focus-tree")) {
     return { command: "focus-file-tree" };
   }
 
-  if (!shift && key === "w") {
+  if (desktopShortcutMatches(input, "document.close-tab")) {
     return { command: "close-current-tab" };
   }
 
@@ -1146,23 +1160,23 @@ function desktopShortcutActionFromInput(input) {
     return { command: "switch-last-tab" };
   }
 
-  if (!shift && key === "p") {
+  if (desktopShortcutMatches(input, "view.preview")) {
     return { command: "set-mode", mode: "preview" };
   }
 
-  if (!shift && key === "s") {
+  if (desktopShortcutMatches(input, "view.source")) {
     return { command: "set-mode", mode: "source" };
   }
 
-  if (!shift && key === "l") {
+  if (desktopShortcutMatches(input, "view.live")) {
     return { command: "set-mode", mode: "live" };
   }
 
-  if (!shift && key === "k") {
+  if (desktopShortcutMatches(input, "navigation.focus-search")) {
     return { command: "focus-file-search" };
   }
 
-  if (!shift && key === "f") {
+  if (desktopShortcutMatches(input, "document.find")) {
     return { command: "find-in-document" };
   }
 
@@ -2128,7 +2142,7 @@ function installMenu() {
             ...(DESKTOP_UPDATES_ENABLED ? [checkForUpdatesMenuItem()] : []),
             {
               label: translate("menu.settings"),
-              accelerator: "CmdOrCtrl+,",
+              accelerator: desktopShortcutAccelerator("help.settings"),
               click: () => {
                 void showSettingsAndHelpCenter("general");
               },
@@ -2153,7 +2167,7 @@ function installMenu() {
       submenu: [
         {
           label: translate("menu.repositories"),
-          accelerator: "CmdOrCtrl+O",
+          accelerator: desktopShortcutAccelerator("repository.open"),
           enabled: !isRepositoryTransitioning,
           click: () => {
             void showRepositoryPanel();
@@ -2180,7 +2194,7 @@ function installMenu() {
               { type: "separator" },
               {
                 label: translate("menu.settings"),
-                accelerator: "CmdOrCtrl+,",
+                accelerator: desktopShortcutAccelerator("help.settings"),
                 click: () => {
                   void showSettingsAndHelpCenter("general");
                 },
@@ -2203,7 +2217,7 @@ function installMenu() {
         { type: "separator" },
         { role: "selectAll", label: translate("menu.selectAll") },
         { type: "separator" },
-        rendererShortcutMenuItem(translate("menu.findDocument"), "CmdOrCtrl+F", { command: "find-in-document" }, {
+        rendererShortcutMenuItem(translate("menu.findDocument"), desktopShortcutAccelerator("document.find"), { command: "find-in-document" }, {
           enabled: hasActiveRepository,
         }),
       ],
@@ -2211,7 +2225,7 @@ function installMenu() {
     {
       label: translate("menu.view"),
       submenu: [
-        rendererShortcutMenuItem(translate("menu.toggleSidebar"), "CmdOrCtrl+B", { command: "toggle-sidebar" }, {
+        rendererShortcutMenuItem(translate("menu.toggleSidebar"), desktopShortcutAccelerator("navigation.toggle-sidebar"), { command: "toggle-sidebar" }, {
           enabled: hasActiveRepository,
         }),
         {
@@ -2237,17 +2251,17 @@ function installMenu() {
             ),
           ],
         },
-        rendererShortcutMenuItem(translate("menu.toggleOutline"), "CmdOrCtrl+Shift+B", { command: "toggle-document-outline" }, {
+        rendererShortcutMenuItem(translate("menu.toggleOutline"), desktopShortcutAccelerator("navigation.toggle-outline"), { command: "toggle-document-outline" }, {
           enabled: hasActiveRepository,
         }),
         { type: "separator" },
-        rendererShortcutMenuItem(translate("menu.preview"), "CmdOrCtrl+P", { command: "set-mode", mode: "preview" }, {
+        rendererShortcutMenuItem(translate("menu.preview"), desktopShortcutAccelerator("view.preview"), { command: "set-mode", mode: "preview" }, {
           enabled: hasActiveRepository,
         }),
-        rendererShortcutMenuItem(translate("menu.source"), "CmdOrCtrl+S", { command: "set-mode", mode: "source" }, {
+        rendererShortcutMenuItem(translate("menu.source"), desktopShortcutAccelerator("view.source"), { command: "set-mode", mode: "source" }, {
           enabled: hasActiveRepository,
         }),
-        rendererShortcutMenuItem(translate("menu.live"), "CmdOrCtrl+L", { command: "set-mode", mode: "live" }, {
+        rendererShortcutMenuItem(translate("menu.live"), desktopShortcutAccelerator("view.live"), { command: "set-mode", mode: "live" }, {
           enabled: hasActiveRepository,
         }),
         { type: "separator" },
@@ -2261,7 +2275,7 @@ function installMenu() {
               enabled: hasActiveRepository,
             }),
             { type: "separator" },
-            rendererShortcutMenuItem(translate("menu.closeTab"), "CmdOrCtrl+W", { command: "close-current-tab" }, {
+            rendererShortcutMenuItem(translate("menu.closeTab"), desktopShortcutAccelerator("document.close-tab"), { command: "close-current-tab" }, {
               enabled: hasActiveRepository,
             }),
           ],
@@ -2294,7 +2308,7 @@ function installMenu() {
 function rendererShortcutMenuItem(label, accelerator, action, { enabled = true } = {}) {
   return {
     label,
-    accelerator,
+    ...(accelerator ? { accelerator } : {}),
     enabled,
     click: () => {
       void sendShortcutToRenderer(action);

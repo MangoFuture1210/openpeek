@@ -135,6 +135,14 @@ the object, and the toolbar closes with its close button, Escape, or selection o
 Clicking an MDX-lite component keeps it rendered; `</>` is its single source entry for both inline and
 external data. Preview does not show the MDX-lite editing toolbar.
 
+Drag across ordinary text in Live to keep a clear native selection, including across wrapped lines,
+and open its compact formatting toolbar. Bold, italic, underline, strikethrough, the fixed foreground
+and highlight palettes, and clearing formatting apply to the complete selection. `Command+B`,
+`Command+I`, and `Command+U` on macOS, or `Ctrl+B`, `Ctrl+I`, and `Ctrl+U` on Windows, provide the common
+shortcuts. Formatting writes back as standard Markdown plus the same narrowly controlled,
+Obsidian-compatible inline styles used by tables. Selecting another Live object closes the text
+toolbar without changing the selected content.
+
 In a native Markdown table, click a cell to edit only that cell's source. You can start a drag while that
 cell is still being edited; crossing into neighboring cells selects the rectangle between the start and
 end cells in any direction. The formatting toolbar stays above the table and applies bold, italic,
@@ -456,7 +464,10 @@ the update cache keeps at most one complete downloaded-but-uninstalled package.
 
 The same screen contains Git Leaf Help, supported file types, environment and repository status, and
 the complete keyboard-shortcut list. Open shortcuts directly with `Command+?` on macOS or `Ctrl+?` on
-Windows.
+Windows. The Shortcuts page also lets you click any editable binding, press a replacement, remove it
+with Backspace or Delete, or restore one or all defaults. Git Leaf rejects duplicate editable bindings.
+The sidebar now defaults to `Command+\` on macOS or `Ctrl+\` on Windows so the conventional bold
+shortcut remains available while editing.
 
 ## When to use another tool
 

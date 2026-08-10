@@ -5,13 +5,28 @@ import {
   KEYBOARD_SHORTCUT_GROUPS,
   getKeyboardShortcutGroups,
   isKeyboardShortcutsHelpShortcut,
+  keyboardShortcutBinding,
+  keyboardShortcutConflicts,
+  keyboardShortcutFromEvent,
+  keyboardShortcutMatches,
   keyboardShortcutsPlainText,
+  normalizeKeyboardShortcut,
+  normalizeKeyboardShortcutOverrides,
 } from "../public/keyboard-shortcuts.js";
 
 test("Command-question-mark and Ctrl-question-mark open keyboard shortcut help", () => {
-  assert.equal(isKeyboardShortcutsHelpShortcut({ key: "?", metaKey: true, shiftKey: true }), true);
   assert.equal(
-    isKeyboardShortcutsHelpShortcut({ code: "Slash", ctrlKey: true, shiftKey: true }),
+    isKeyboardShortcutsHelpShortcut(
+      { key: "?", metaKey: true, shiftKey: true },
+      { platform: "darwin" },
+    ),
+    true,
+  );
+  assert.equal(
+    isKeyboardShortcutsHelpShortcut(
+      { code: "Slash", ctrlKey: true, shiftKey: true },
+      { platform: "win32" },
+    ),
     true,
   );
   assert.equal(isKeyboardShortcutsHelpShortcut({ key: "/", metaKey: true }), false);
@@ -27,7 +42,7 @@ test("Command-question-mark and Ctrl-question-mark open keyboard shortcut help",
 });
 
 test("keyboard shortcut help keeps the agreed Git Leaf shortcuts", () => {
-  const text = keyboardShortcutsPlainText();
+  const text = keyboardShortcutsPlainText("en", { platform: "darwin" });
 
   assert.match(text, /Command\+O\s+Open Repository Panel/);
   assert.match(text, /Command\+1\.\.9\s+Switch to Visible Repository 1\.\.9 \(panel open\)/);
@@ -54,7 +69,10 @@ test("keyboard shortcut help keeps the agreed Git Leaf shortcuts", () => {
   assert.match(text, /Command\+Shift\+R\s+Reveal in File Manager/);
   assert.match(text, /Command\+Click\s+Open File in New Active Tab/);
   assert.match(text, /Command\+Enter\s+Open File in New Active Tab/);
-  assert.match(text, /Command\+B\s+Toggle Sidebar/);
+  assert.match(text, /Command\+B\s+Bold Selected Text/);
+  assert.match(text, /Command\+I\s+Italicize Selected Text/);
+  assert.match(text, /Command\+U\s+Underline Selected Text/);
+  assert.match(text, /Command\+\\\s+Toggle Sidebar/);
   assert.match(text, /Option\+1\s+Switch to All View/);
   assert.match(text, /Option\+2\s+Switch to Favorites View/);
   assert.match(text, /Option\+3\s+Switch to Sync View/);
@@ -68,7 +86,7 @@ test("keyboard shortcut help keeps the agreed Git Leaf shortcuts", () => {
   assert.match(text, /ArrowLeft\/Right\s+Collapse or Expand Folder/);
   assert.match(text, /Enter\s+Open Selected File/);
   assert.match(text, /Command\+,\s+Open Settings/);
-  assert.match(text, /Command\+\?\s+Open Keyboard Shortcuts/);
+  assert.match(text, /Command\+Shift\+\/\s+Open Keyboard Shortcuts/);
 });
 
 test("keyboard shortcut help localizes labels without changing key bindings", () => {
@@ -76,12 +94,56 @@ test("keyboard shortcut help localizes labels without changing key bindings", ()
   const chinese = getKeyboardShortcutGroups("zh-CN");
 
   assert.deepEqual(
-    english.flatMap((group) => group.shortcuts.map((shortcut) => shortcut.keys)),
-    chinese.flatMap((group) => group.shortcuts.map((shortcut) => shortcut.keys)),
+    english.flatMap((group) => group.shortcuts.map((shortcut) => shortcut.binding)),
+    chinese.flatMap((group) => group.shortcuts.map((shortcut) => shortcut.binding)),
   );
   assert.equal(chinese[0].title, "仓库");
   assert.match(keyboardShortcutsPlainText("zh-CN"), /键盘快捷键/);
   assert.match(keyboardShortcutsPlainText("zh-CN"), /打开仓库面板/);
+});
+
+test("configurable shortcuts normalize, match both platforms, disable, and reject conflicts", () => {
+  assert.equal(normalizeKeyboardShortcut("cmd+option+arrowleft"), "Mod+Alt+Left");
+  assert.equal(normalizeKeyboardShortcut("Ctrl+Shift+u"), "Ctrl+Shift+U");
+  assert.equal(normalizeKeyboardShortcut("Shift+B"), "");
+  assert.equal(
+    keyboardShortcutFromEvent(
+      { code: "KeyB", metaKey: true },
+      { platform: "darwin" },
+    ),
+    "Mod+B",
+  );
+  assert.equal(
+    keyboardShortcutFromEvent(
+      { code: "KeyB", ctrlKey: true },
+      { platform: "win32" },
+    ),
+    "Mod+B",
+  );
+
+  const overrides = normalizeKeyboardShortcutOverrides({
+    "editor.bold": "Mod+Alt+B",
+    "editor.italic": null,
+    arbitrary: "Mod+Q",
+  });
+  assert.deepEqual(overrides, {
+    "editor.bold": "Mod+Alt+B",
+    "editor.italic": null,
+  });
+  assert.equal(keyboardShortcutBinding("editor.italic", overrides), null);
+  assert.equal(
+    keyboardShortcutMatches(
+      { code: "KeyB", metaKey: true, altKey: true },
+      "editor.bold",
+      overrides,
+      { platform: "darwin" },
+    ),
+    true,
+  );
+  assert.deepEqual(
+    keyboardShortcutConflicts({ "editor.bold": "Mod+I" }),
+    [{ binding: "Mod+I", actionIds: ["editor.bold", "editor.italic"] }],
+  );
 });
 
 test("keyboard shortcut help does not assign a shortcut to closing the repository", () => {

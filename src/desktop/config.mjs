@@ -509,6 +509,7 @@ function normalizeDesktopPreferences(value, { newInstall = false } = {}) {
     "fileTreeMode",
     "showDocumentTitles",
     "gitRemoteCheckIntervalMinutes",
+    "keyboardShortcuts",
     "legacyThemeMigrationPending",
     "mode",
     "treeDirectories",
