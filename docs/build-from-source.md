@@ -114,6 +114,12 @@ one-time snapshot. When the cross-identity updater itself changes, run
 when desktop interruption is acceptable: its Profile is isolated, but its temporary App still opens
 and restarts visibly.
 
+Local development packages are host-native: Intel Macs build `x64`, while Apple Silicon Macs build
+`arm64`. Their intermediate App is staged under the macOS temporary directory so cloud-synchronized
+checkout metadata cannot invalidate code signing. Community and official distributable macOS packages
+remain universal and contain both architectures. Set `GIT_LEAF_DEV_ARCH=universal` only when a local
+development check specifically needs the two-architecture package.
+
 ## Validate a change
 
 Run the cross-platform core suite:
@@ -135,8 +141,10 @@ Platform and UI changes have additional gates in [AGENTS.md](../AGENTS.md).
 
 - **Node version:** `node --version` must report 22 or newer.
 - **Git is not found:** make sure `git --version` works in the same terminal.
-- **Electron download fails:** retry on a stable network or configure the standard Electron mirror used
-  by your environment.
+- **Electron download fails:** packaging first reuses matching archives from the standard Electron cache
+  under `~/Library/Caches/electron`. If the archive is not cached, retry on a stable network, configure
+  the standard `ELECTRON_MIRROR` used by your environment, or point `ELECTRON_ZIP_DIR` at a directory of
+  Electron archives whose checksums you have verified.
 - **macOS blocks a non-notarized package:** run the unpackaged app with `npm run desktop`, or sign and
   notarize it with your own identity. Do not present a locally or ad-hoc signed package as a Mango
   Future release.

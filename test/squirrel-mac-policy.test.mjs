@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  normalizeSquirrelMacArchitectures,
   patchSquirrelArchitectureBuffer,
   SQUIRREL_MAC_POLICY,
+  squirrelMacSliceExtractionMode,
   verifySquirrelArchitectureBuffer,
 } from "../scripts/squirrel-mac-policy.mjs";
 
@@ -20,6 +22,24 @@ const FIXTURES = {
 
 test("packaged Squirrel policy is explicitly nonprivileged", () => {
   assert.equal(SQUIRREL_MAC_POLICY, "nonprivileged-only");
+});
+
+test("Squirrel policy handles native and universal macOS binaries", () => {
+  assert.deepEqual(normalizeSquirrelMacArchitectures("x86_64\n"), ["x86_64"]);
+  assert.deepEqual(
+    normalizeSquirrelMacArchitectures("x86_64 arm64\n"),
+    ["x86_64", "arm64"],
+  );
+  assert.equal(squirrelMacSliceExtractionMode(["x86_64"]), "copy");
+  assert.equal(squirrelMacSliceExtractionMode(["arm64"]), "copy");
+  assert.equal(
+    squirrelMacSliceExtractionMode(["x86_64", "arm64"]),
+    "lipo",
+  );
+  assert.throws(
+    () => normalizeSquirrelMacArchitectures("x86_64 riscv64"),
+    /Unsupported Squirrel architecture: riscv64/,
+  );
 });
 
 for (const [architecture, fixture] of Object.entries(FIXTURES)) {

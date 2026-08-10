@@ -11,6 +11,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   utimesSync,
@@ -137,6 +138,10 @@ const DEFAULT_SMOKE_USER_DATA_DIR = path.join(
   tmpdir(),
   `git-leaf-dev-smoke-${process.pid}-${Date.now()}`,
 );
+const DEFAULT_DEVELOPMENT_OUT_DIR = path.join(
+  tmpdir(),
+  `git-leaf-dev-build-${process.pid}-${Date.now()}`,
+);
 const DEVELOPMENT_PROFILE_COPY_ENTRIES = [
   "desktop-config.json",
   "desktop-config.backup.json",
@@ -204,11 +209,20 @@ export function electronCacheZipDir({
     return undefined;
   }
 
+  const archiveArchitectures = arch === "universal"
+    ? ["x64", "arm64"]
+    : [arch];
+  if (!archiveArchitectures.every((candidate) => ["x64", "arm64"].includes(candidate))) {
+    throw new Error(`Unsupported Electron archive architecture: ${arch}`);
+  }
+
   for (const entry of cacheEntries) {
     const entryName = typeof entry === "string" ? entry : entry.name;
     const zipDir = path.join(cacheRoot, entryName);
-    const zipPath = path.join(zipDir, `electron-v${version}-${platform}-${arch}.zip`);
-    if (exists(zipPath)) {
+    const hasRequiredArchives = archiveArchitectures.every((archiveArch) => exists(
+      path.join(zipDir, `electron-v${version}-${platform}-${archiveArch}.zip`),
+    ));
+    if (hasRequiredArchives) {
       return zipDir;
     }
   }
@@ -220,11 +234,12 @@ export function macReleasePaths({
   rootDir = REPO_ROOT,
   appName = DEFAULT_RELEASE_OPTIONS.appName,
   arch = DEFAULT_RELEASE_OPTIONS.arch,
+  outDir = DEFAULT_RELEASE_OPTIONS.outDir,
   version = DEFAULT_RELEASE_OPTIONS.version,
   releaseTrack = DEFAULT_RELEASE_OPTIONS.releaseTrack,
   buildId = DEFAULT_RELEASE_OPTIONS.buildId,
 } = {}) {
-  const distDir = path.join(rootDir, "dist");
+  const distDir = path.resolve(rootDir, outDir);
   const platformKey = `darwin-${arch}`;
   const appRoot = path.join(distDir, `${appName}-${platformKey}`);
   return {
@@ -246,21 +261,43 @@ export function macDevelopmentInstallPaths({
   rootDir = REPO_ROOT,
   appName = DEFAULT_RELEASE_OPTIONS.appName,
   arch = DEFAULT_RELEASE_OPTIONS.arch,
+  outDir = DEFAULT_RELEASE_OPTIONS.outDir,
   version = DEFAULT_RELEASE_OPTIONS.version,
   releaseTrack = DEFAULT_RELEASE_OPTIONS.releaseTrack,
   buildId = DEFAULT_RELEASE_OPTIONS.buildId,
   applicationsDir = DEFAULT_RELEASE_OPTIONS.applicationsDir,
 } = {}) {
   return {
-    ...macReleasePaths({ rootDir, appName, arch, version, releaseTrack, buildId }),
+    ...macReleasePaths({ rootDir, appName, arch, outDir, version, releaseTrack, buildId }),
     applicationsDir,
     installedAppDir: path.join(applicationsDir, `${appName}.app`),
   };
 }
 
-export function macDevelopmentInstallOptions(options = {}) {
+export function developmentMacArchitecture(hostArch = process.arch) {
+  if (["x64", "arm64"].includes(hostArch)) {
+    return hostArch;
+  }
+  throw new Error(`Unsupported macOS development architecture: ${hostArch}`);
+}
+
+export function macDevelopmentInstallOptions(options = {}, {
+  hostArch = process.arch,
+  defaultOutDir = DEFAULT_DEVELOPMENT_OUT_DIR,
+} = {}) {
+  const {
+    developmentArch,
+    developmentOutDir,
+    ...baseOptions
+  } = options;
+  const arch = developmentArch || developmentMacArchitecture(hostArch);
+  if (!["x64", "arm64", "universal"].includes(arch)) {
+    throw new Error(`Unsupported macOS development architecture: ${arch}`);
+  }
   return {
-    ...options,
+    ...baseOptions,
+    arch,
+    outDir: developmentOutDir || defaultOutDir,
     dev: true,
   };
 }
@@ -930,6 +967,8 @@ function releaseOptionsFromEnv() {
       || DEFAULT_RELEASE_OPTIONS.updateRemoteRoot,
     dmgLocale: detectedDmgLocale(),
     electronZipDir: process.env.ELECTRON_ZIP_DIR || undefined,
+    developmentArch: process.env.GIT_LEAF_DEV_ARCH || undefined,
+    developmentOutDir: process.env.GIT_LEAF_DEV_OUT_DIR || undefined,
     devUserDataDir: process.env.GIT_LEAF_DEV_USER_DATA_DIR || undefined,
     smokeUserDataDir: process.env.GIT_LEAF_SMOKE_USER_DATA_DIR || DEFAULT_SMOKE_USER_DATA_DIR,
     smokeRepoRoot: process.env.GIT_LEAF_SMOKE_REPO_ROOT || "",
@@ -1081,26 +1120,46 @@ function checkReleaseVersion(options) {
 }
 
 function packageMac(options) {
+  const packageOptions = {
+    ...options,
+    electronZipDir: options.electronZipDir || electronCacheZipDir({
+      version: installedElectronVersion({ rootDir: REPO_ROOT }),
+      arch: options.arch,
+    }),
+  };
+  if (packageOptions.electronZipDir) {
+    console.log(`Using cached Electron archives from ${packageOptions.electronZipDir}`);
+  }
   const packager = electronPackagerCommand({ rootDir: REPO_ROOT });
   requirePath(packager.args[0]);
-  withReleaseBuildInfoFile({ rootDir: REPO_ROOT, buildInfo: options }, () => {
-    run(packager.command, [...packager.args, ...electronPackagerArgs(options)]);
+  withReleaseBuildInfoFile({ rootDir: REPO_ROOT, buildInfo: packageOptions }, () => {
+    run(packager.command, [...packager.args, ...electronPackagerArgs(packageOptions)]);
   });
   patchSquirrelMacPolicy({
-    appDir: macReleasePaths(options).appDir,
+    appDir: macReleasePaths(packageOptions).appDir,
     rootDir: REPO_ROOT,
   });
-  applyMacBundleIcon(options, macDevelopmentInstallPaths(options));
-  if (options.distribution === "source") {
-    signMacAppAdHoc({ appDir: macReleasePaths(options).appDir });
+  applyMacBundleIcon(packageOptions, macDevelopmentInstallPaths(packageOptions));
+  if (packageOptions.distribution === "source") {
+    signMacAppAdHoc({ appDir: macReleasePaths(packageOptions).appDir });
   }
   verifySquirrelMacPolicy({
-    appDir: macReleasePaths(options).appDir,
+    appDir: macReleasePaths(packageOptions).appDir,
   });
+}
+
+export function macCodeSigningExtendedAttributeCleanupCommand(appDir) {
+  return ["xattr", ["-cr", appDir]];
+}
+
+function clearMacCodeSigningExtendedAttributes(appDir) {
+  const [command, args] = macCodeSigningExtendedAttributeCleanupCommand(appDir);
+  run(command, args);
 }
 
 export function signMacAppAdHoc({ appDir } = {}) {
   requirePath(appDir);
+  clearMacCodeSigningExtendedAttributes(appDir);
   run("codesign", [
     "--force",
     "--deep",
@@ -1240,6 +1299,11 @@ function cleanupDevelopmentPackage(paths) {
     runOptional(command, args);
   }
   rmSync(cleanup.removeDir, { recursive: true, force: true });
+  try {
+    rmdirSync(paths.distDir);
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY"].includes(error?.code)) throw error;
+  }
 }
 
 function refreshDevelopmentAppIcon(paths) {
@@ -1352,6 +1416,7 @@ function signTarget(filePath, identity, { hardenedRuntime = true, entitlementsPa
 function signMac(options, paths) {
   const entitlementsPath = macEntitlementsPath(options);
   requirePath(entitlementsPath);
+  clearMacCodeSigningExtendedAttributes(paths.appDir);
 
   for (const target of nestedMachOSigningTargets(paths.appDir)) {
     signTarget(target, options.identity);

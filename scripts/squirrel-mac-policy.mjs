@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -39,6 +40,27 @@ const ARCHITECTURE_PATCHES = {
     ),
   },
 };
+
+export function normalizeSquirrelMacArchitectures(value) {
+  const architectures = (Array.isArray(value) ? value : String(value || "").trim().split(/\s+/))
+    .map((architecture) => String(architecture || "").trim())
+    .filter(Boolean);
+  if (architectures.length === 0) {
+    throw new Error("Squirrel binary does not report a macOS architecture");
+  }
+  for (const architecture of architectures) {
+    if (!ARCHITECTURE_PATCHES[architecture]) {
+      throw new Error(`Unsupported Squirrel architecture: ${architecture}`);
+    }
+  }
+  return [...new Set(architectures)];
+}
+
+export function squirrelMacSliceExtractionMode(architectures) {
+  return normalizeSquirrelMacArchitectures(architectures).length === 1
+    ? "copy"
+    : "lipo";
+}
 
 function countOccurrences(buffer, pattern) {
   let count = 0;
@@ -96,6 +118,7 @@ function runChecked(command, args) {
       || `Command failed: ${command} ${args.join(" ")}`,
     );
   }
+  return result.stdout?.trim() || "";
 }
 
 function electronVersion(rootDir) {
@@ -129,19 +152,27 @@ function withThinArchitectures(binaryPath, callback) {
   const temporaryRoot = mkdtempSync(
     path.join(tmpdir(), "git-leaf-squirrel-policy."),
   );
-  const slices = Object.keys(ARCHITECTURE_PATCHES).map((architecture) => ({
+  const architectures = normalizeSquirrelMacArchitectures(
+    runChecked("lipo", ["-archs", binaryPath]),
+  );
+  const extractionMode = squirrelMacSliceExtractionMode(architectures);
+  const slices = architectures.map((architecture) => ({
     architecture,
     path: path.join(temporaryRoot, `Squirrel.${architecture}`),
   }));
   try {
     for (const slice of slices) {
-      runChecked("lipo", [
-        binaryPath,
-        "-thin",
-        slice.architecture,
-        "-output",
-        slice.path,
-      ]);
+      if (extractionMode === "copy") {
+        copyFileSync(binaryPath, slice.path);
+      } else {
+        runChecked("lipo", [
+          binaryPath,
+          "-thin",
+          slice.architecture,
+          "-output",
+          slice.path,
+        ]);
+      }
     }
     callback(slices);
   } finally {
@@ -169,12 +200,16 @@ export function patchSquirrelMacPolicy({
       writeFileSync(slice.path, patched);
     }
     const replacementPath = `${binaryPath}.git-leaf-policy`;
-    runChecked("lipo", [
-      "-create",
-      ...slices.map((slice) => slice.path),
-      "-output",
-      replacementPath,
-    ]);
+    if (slices.length === 1) {
+      copyFileSync(slices[0].path, replacementPath);
+    } else {
+      runChecked("lipo", [
+        "-create",
+        ...slices.map((slice) => slice.path),
+        "-output",
+        replacementPath,
+      ]);
+    }
     chmodSync(replacementPath, binaryMode);
     renameSync(replacementPath, binaryPath);
   });

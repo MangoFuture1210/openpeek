@@ -21,11 +21,13 @@ import {
   developmentAppQuitCommands,
   developmentAppForceQuitCommands,
   developmentAppProcessQueries,
+  developmentMacArchitecture,
   electronCacheZipDir,
   electronPackagerArgs,
   ensureReleaseSigningIdentityAccess,
   launchDevelopmentAppCommand,
   macCommandRequiresNewReleaseVersion,
+  macCodeSigningExtendedAttributeCleanupCommand,
   macDevelopmentInstallOptions,
   macDevelopmentUserDataPaths,
   macBundleIconPaths,
@@ -597,6 +599,36 @@ test("electron cache zip dir locates the matching cached Electron zip", () => {
   );
 });
 
+test("electron cache zip dir requires both archives for a universal package", () => {
+  const cached = new Set([
+    "/Users/example/Library/Caches/electron/cache-id/electron-v43.2.0-darwin-x64.zip",
+    "/Users/example/Library/Caches/electron/cache-id/electron-v43.2.0-darwin-arm64.zip",
+  ]);
+  assert.equal(
+    slashPath(electronCacheZipDir({
+      homeDir: "/Users/example",
+      version: "43.2.0",
+      platform: "darwin",
+      arch: "universal",
+      exists: (filePath) => cached.has(slashPath(filePath)),
+      listDir: () => ["cache-id"],
+    })),
+    "/Users/example/Library/Caches/electron/cache-id",
+  );
+
+  cached.delete(
+    "/Users/example/Library/Caches/electron/cache-id/electron-v43.2.0-darwin-arm64.zip",
+  );
+  assert.equal(electronCacheZipDir({
+    homeDir: "/Users/example",
+    version: "43.2.0",
+    platform: "darwin",
+    arch: "universal",
+    exists: (filePath) => cached.has(slashPath(filePath)),
+    listDir: () => ["cache-id"],
+  }), undefined);
+});
+
 test("release runs the full distribution sequence", () => {
   assert.deepEqual(releaseSteps, [
     "check-version",
@@ -1134,15 +1166,22 @@ test("dev install removes the temporary packaged app after copying into Applicat
   );
 });
 
-test("dev install marks the same app identity as a development build", () => {
+test("dev install uses the host architecture and a temporary build directory", () => {
   const options = macDevelopmentInstallOptions({
     appName: "Git Leaf",
+    arch: "universal",
     bundleId: "org.gitleaf.community",
+    outDir: "dist",
+  }, {
+    hostArch: "x64",
+    defaultOutDir: "/tmp/git-leaf-dev-build-test",
   });
 
   assert.deepEqual(options, {
     appName: "Git Leaf",
+    arch: "x64",
     bundleId: "org.gitleaf.community",
+    outDir: "/tmp/git-leaf-dev-build-test",
     dev: true,
   });
   assert.equal(
@@ -1152,6 +1191,22 @@ test("dev install marks the same app identity as a development build", () => {
       ...options,
     }).installedAppDir,
     "/Applications/Git Leaf.app",
+  );
+});
+
+test("development architecture supports current Intel and Apple Silicon Macs", () => {
+  assert.equal(developmentMacArchitecture("x64"), "x64");
+  assert.equal(developmentMacArchitecture("arm64"), "arm64");
+  assert.throws(
+    () => developmentMacArchitecture("ia32"),
+    /Unsupported macOS development architecture: ia32/,
+  );
+});
+
+test("mac signing removes extended attributes before codesign", () => {
+  assert.deepEqual(
+    macCodeSigningExtendedAttributeCleanupCommand("/tmp/Git Leaf.app"),
+    ["xattr", ["-cr", "/tmp/Git Leaf.app"]],
   );
 });
 

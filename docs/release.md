@@ -112,6 +112,11 @@ It is a routine reversible verification step and does not require a separate mai
 merely because the isolated development App is visible. When a harness requires an
 `--allow-visible-app` intent flag, the automation supplies it as part of the already-authorized flow.
 
+Development installs and isolated smoke builds use the current Mac's native architecture and stage their
+intermediate App outside cloud-synchronized checkouts. Community and official distributable macOS
+packages remain universal; the host-native development path does not change update manifests or release
+artifacts.
+
 The historical persistent `git-leaf-dev` Profile can be merged once, with the App closed, using:
 
 ```bash
