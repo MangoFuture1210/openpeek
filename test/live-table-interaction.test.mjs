@@ -4,6 +4,7 @@ import test from "node:test";
 import { EditorState } from "@codemirror/state";
 
 import {
+  createLiveTextSelectionInteraction,
   createLiveTableInteraction,
   isVerticalTableColumnSelection,
 } from "../src/client/source-editor.mjs";
@@ -399,6 +400,75 @@ test("only a vertical multi-cell range qualifies for column reordering", () => {
   }), false);
 });
 
+test("an ordinary Live text selection reuses the formatting toolbar and stays selected", async () => {
+  const document = new FakeDocument();
+  const root = document.createElement("div");
+  document.body.append(root);
+  const selectionBackground = document.createElement("div");
+  selectionBackground.className = "cm-selectionBackground";
+  selectionBackground.rect = rect(120, 180, 110, 24);
+  root.append(selectionBackground);
+
+  const view = {
+    dom: root,
+    scrollDOM: {
+      getBoundingClientRect: () => rect(80, 80, 900, 600),
+    },
+    hasFocus: true,
+    state: EditorState.create({
+      doc: "Plain text",
+      selection: { anchor: 0, head: 5 },
+    }),
+    dispatch(spec) {
+      this.state = this.state.update(spec).state;
+    },
+    focus() {
+      this.hasFocus = true;
+      document.activeElement = root;
+    },
+    coordsAtPos(position) {
+      return rect(120 + position * 8, 180, 1, 24);
+    },
+  };
+  const interaction = createLiveTextSelectionInteraction({
+    getView: () => view,
+    getMode: () => "live",
+    isEditable: () => true,
+    locale: "en",
+    documentRoot: document,
+  });
+
+  interaction.handleUpdate();
+  await nextTask();
+  const toolbar = document.body.querySelector(".cm-live-text-format-toolbar");
+  assert.ok(toolbar);
+  assert.equal(toolbar.hidden, false);
+
+  const boldButton = toolbar.querySelector('[data-live-table-format-action="bold"]');
+  assert.ok(toolbar.querySelector('[data-live-table-format-action="underline"]'));
+  toolbar.dispatchEvent(pointerEvent(boldButton, { type: "click" }));
+  interaction.handleUpdate();
+  await nextTask();
+  assert.equal(view.state.doc.toString(), "**Plain** text");
+  assert.equal(view.state.selection.main.empty, false);
+  assert.equal(boldButton.getAttribute("aria-pressed"), "true");
+
+  const colorTrigger = toolbar.querySelector('[data-live-table-menu-toggle="text-color"]');
+  toolbar.dispatchEvent(pointerEvent(colorTrigger, { type: "click" }));
+  const redButton = toolbar.querySelector('[data-live-table-color-action="#dc2626"]');
+  toolbar.dispatchEvent(pointerEvent(redButton, { type: "click" }));
+  interaction.handleUpdate();
+  await nextTask();
+  assert.equal(
+    view.state.doc.toString(),
+    '<span style="color: #dc2626;">**Plain**</span> text',
+  );
+  assert.equal(view.state.selection.main.empty, false);
+  assert.equal(toolbar.hidden, false);
+
+  interaction.destroy();
+});
+
 function liveTableFixture() {
   const document = new FakeDocument();
   const root = document.createElement("div");
@@ -535,6 +605,7 @@ class FakeDocument {
       clientWidth: 1200,
       clientHeight: 800,
     };
+    this.body = this.createElement("body");
     this.activeElement = null;
     this.pointTarget = null;
   }
@@ -670,6 +741,14 @@ class FakeElement {
     this.listeners.set(type, listeners);
   }
 
+  removeEventListener(type, listener) {
+    const listeners = this.listeners.get(type) ?? [];
+    this.listeners.set(
+      type,
+      listeners.filter((candidate) => candidate !== listener),
+    );
+  }
+
   dispatchEvent(event) {
     event.target ??= this;
     for (const listener of this.listeners.get(event.type) ?? []) {
@@ -679,6 +758,18 @@ class FakeElement {
 
   focus() {
     this.ownerDocument.activeElement = this;
+  }
+
+  remove() {
+    if (!this.parentElement) {
+      this.isConnected = false;
+      return;
+    }
+    this.parentElement.children = this.parentElement.children.filter(
+      (child) => child !== this,
+    );
+    this.parentElement = null;
+    this.isConnected = false;
   }
 
   setSelectionRange(start, end) {

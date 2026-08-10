@@ -606,6 +606,21 @@ button {
   gap: 14px;
 }
 
+.shortcut-page-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 14px;
+}
+
+.shortcut-page-actions button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 7px 11px;
+}
+
 .shortcut-group,
 .status-block {
   border: 1px solid var(--border);
@@ -720,11 +735,79 @@ button {
 .shortcut-row,
 .status-row {
   display: grid;
-  grid-template-columns: minmax(140px, 210px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
   border-top: 1px solid var(--border-soft);
   padding: 10px 0;
+}
+
+.shortcut-row {
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) 32px;
+}
+
+.status-row {
+  grid-template-columns: minmax(140px, 210px) minmax(0, 1fr);
+}
+
+.shortcut-binding {
+  justify-self: start;
+  min-width: 132px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 20px;
+  padding: 1px 8px 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.shortcut-binding:hover,
+.shortcut-binding:focus-visible,
+.shortcut-binding.is-recording {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: none;
+}
+
+.shortcut-binding.is-recording {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--accent);
+}
+
+.shortcut-reset {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.shortcut-reset:hover:not(:disabled),
+.shortcut-reset:focus-visible {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.shortcut-reset:disabled {
+  opacity: 0.25;
+}
+
+.shortcut-capture-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.shortcut-fixed-spacer {
+  width: 28px;
 }
 
 .shortcut-row:first-child,

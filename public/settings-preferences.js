@@ -1,3 +1,5 @@
+import { normalizeKeyboardShortcutOverrides } from "./keyboard-shortcuts.js";
+
 export const DEFAULT_USER_PREFERENCES = Object.freeze({
   language: "system",
   colorMode: "system",
@@ -6,6 +8,7 @@ export const DEFAULT_USER_PREFERENCES = Object.freeze({
   fileTreeMode: "content",
   showDocumentTitles: true,
   gitRemoteCheckIntervalMinutes: 10,
+  keyboardShortcuts: Object.freeze({}),
 });
 
 export const LEGACY_USER_PREFERENCES = Object.freeze({
@@ -132,6 +135,9 @@ export function normalizeUserPreferences(value, {
       source.gitRemoteCheckIntervalMinutes,
       defaults.gitRemoteCheckIntervalMinutes,
     ),
+    keyboardShortcuts: normalizeKeyboardShortcutOverrides(
+      source.keyboardShortcuts ?? defaults.keyboardShortcuts,
+    ),
   };
 }
 
@@ -164,6 +170,8 @@ export function preferencePatch(key, value) {
       return {
         gitRemoteCheckIntervalMinutes: normalizeGitRemoteCheckIntervalMinutes(value),
       };
+    case "keyboardShortcuts":
+      return { keyboardShortcuts: normalizeKeyboardShortcutOverrides(value) };
     default:
       return null;
   }

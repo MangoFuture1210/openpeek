@@ -73,7 +73,14 @@
       helpDescription: "Guidance for files, filters, worktrees, sharing, and privacy.",
       shortcutsKicker: "Keyboard",
       shortcutsTitle: "Keyboard Shortcuts",
-      shortcutsDescription: "System menu commands and current Git Leaf keyboard actions.",
+      shortcutsDescription: "Click an editable shortcut, then press a new key combination. Conflicting bindings are rejected.",
+      shortcutResetAll: "Restore all defaults",
+      shortcutReset: "Restore default",
+      shortcutRecord: "Change shortcut",
+      shortcutRecording: "Press shortcut…",
+      shortcutUnassigned: "Unassigned",
+      shortcutClearHint: "Backspace or Delete removes a binding; Escape cancels.",
+      shortcutConflict: "This shortcut is already used by {action}.",
       statusKicker: "About & Status",
       statusTitle: "About & Status",
       statusDescription: "View version, environment, and current repository status.",
@@ -180,7 +187,14 @@
       helpDescription: "文件、筛选、worktree、分享和隐私说明集中在这里。",
       shortcutsKicker: "键盘",
       shortcutsTitle: "快捷键",
-      shortcutsDescription: "保留系统菜单入口和 Git Leaf 当前键盘操作。",
+      shortcutsDescription: "点击可编辑的快捷键后直接按下新组合键；发生冲突时不会保存。",
+      shortcutResetAll: "全部恢复默认",
+      shortcutReset: "恢复默认",
+      shortcutRecord: "修改快捷键",
+      shortcutRecording: "请按新快捷键…",
+      shortcutUnassigned: "未设置",
+      shortcutClearHint: "按退格键或 Delete 可取消绑定，按 Escape 退出录入。",
+      shortcutConflict: "该快捷键已被“{action}”使用。",
       statusKicker: "关于与状态",
       statusTitle: "关于与状态",
       statusDescription: "查看版本、运行环境以及当前仓库状态。",
@@ -228,6 +242,7 @@
   const gitRemoteCheckInterval = document.querySelector("#git-remote-check-interval");
   const helpSections = document.querySelector("#help-sections");
   const shortcutGroups = document.querySelector("#shortcut-groups");
+  const shortcutResetAll = document.querySelector("#shortcut-reset-all");
   const appStatus = document.querySelector("#app-status");
   const environmentStatus = document.querySelector("#environment-status");
   const repositoryStatus = document.querySelector("#repository-status");
@@ -245,6 +260,8 @@
   let saveQueue = Promise.resolve();
   let updateCheckGeneration = 0;
   let helpScrollFrame = 0;
+  let shortcutModelGroups = [];
+  let recordingShortcutId = "";
 
   navigation.addEventListener("click", handleNavigationClick);
   helpNavigation.addEventListener("click", handleHelpNavigationClick);
@@ -253,6 +270,8 @@
   document.addEventListener("keydown", handleSettingsKeydown, true);
   document.addEventListener("change", handlePreferenceChange);
   document.addEventListener("click", handleExternalLinkClick);
+  shortcutGroups.addEventListener("click", handleShortcutClick);
+  shortcutResetAll?.addEventListener("click", resetAllShortcuts);
   fontSizeInput.addEventListener("input", updateFontSizeOutput);
   systemColorQuery.addEventListener?.("change", handleSystemColorChange);
 
@@ -264,6 +283,7 @@
   }
 
   checkForUpdatesButton.addEventListener("click", checkForUpdates);
+  api.onShortcutInput?.((input) => handleRecordedShortcutInput(input));
   api.onShow((payload) => {
     if (payload?.model) {
       applyModel(payload.model);
@@ -306,7 +326,15 @@
       updateFontSizeOutput();
       applyAppearance(currentPreferences);
       renderHelp(model.helpSections);
-      renderShortcuts(model.shortcutGroups);
+      shortcutModelGroups = Array.isArray(model.shortcutGroups)
+        ? model.shortcutGroups.map((group) => ({
+            ...group,
+            shortcuts: Array.isArray(group?.shortcuts)
+              ? group.shortcuts.map((shortcut) => ({ ...shortcut }))
+              : [],
+          }))
+        : [];
+      renderShortcuts(shortcutModelGroups);
       renderStatus(model.status);
       hideError();
     } finally {
@@ -316,6 +344,7 @@
   }
 
   function showSection(value) {
+    cancelShortcutRecording();
     currentSection = sections.has(value) ? value : "general";
     for (const button of navigation.querySelectorAll("[data-section]")) {
       if (button.dataset.section === currentSection) {
@@ -346,6 +375,10 @@
   }
 
   function handleSettingsKeydown(event) {
+    if (recordingShortcutId) {
+      handleRecordedShortcutInput(event);
+      return;
+    }
     if (event.isComposing || event.altKey) {
       return;
     }
@@ -679,16 +712,175 @@
       for (const shortcut of Array.isArray(group?.shortcuts) ? group.shortcuts : []) {
         const row = document.createElement("div");
         row.className = "shortcut-row";
-        const keys = document.createElement("kbd");
-        keys.textContent = stringValue(shortcut?.keys);
         const action = document.createElement("span");
+        action.className = "shortcut-action";
         action.textContent = stringValue(shortcut?.action);
-        row.append(keys, action);
+
+        if (shortcut?.customizable && shortcut?.id) {
+          row.classList.add("is-customizable");
+          const record = document.createElement("button");
+          record.type = "button";
+          record.className = "shortcut-binding";
+          record.dataset.shortcutRecord = shortcut.id;
+          record.textContent = recordingShortcutId === shortcut.id
+            ? t("shortcutRecording")
+            : stringValue(shortcut.keys, t("shortcutUnassigned"));
+          record.setAttribute(
+            "aria-label",
+            `${t("shortcutRecord")}: ${action.textContent}. ${record.textContent}`,
+          );
+          if (recordingShortcutId === shortcut.id) {
+            record.classList.add("is-recording");
+            record.setAttribute("aria-describedby", "shortcut-capture-hint");
+          }
+
+          const reset = document.createElement("button");
+          reset.type = "button";
+          reset.className = "shortcut-reset";
+          reset.dataset.shortcutReset = shortcut.id;
+          reset.textContent = "↺";
+          reset.title = t("shortcutReset");
+          reset.setAttribute(
+            "aria-label",
+            `${t("shortcutReset")}: ${action.textContent}`,
+          );
+          reset.disabled = shortcut.binding === shortcut.defaultBinding;
+          row.append(record, action, reset);
+        } else {
+          const keys = document.createElement("kbd");
+          keys.textContent = stringValue(shortcut?.keys);
+          const fixed = document.createElement("span");
+          fixed.className = "shortcut-fixed-spacer";
+          fixed.setAttribute("aria-hidden", "true");
+          row.append(keys, action, fixed);
+        }
         list.append(row);
       }
       section.append(list);
       shortcutGroups.append(section);
     }
+
+    const hint = document.createElement("p");
+    hint.id = "shortcut-capture-hint";
+    hint.className = "shortcut-capture-hint";
+    hint.textContent = t("shortcutClearHint");
+    shortcutGroups.prepend(hint);
+  }
+
+  function handleShortcutClick(event) {
+    const reset = event.target.closest?.("[data-shortcut-reset]");
+    if (reset) {
+      void updateShortcutBinding(reset.dataset.shortcutReset, undefined);
+      return;
+    }
+    const record = event.target.closest?.("[data-shortcut-record]");
+    if (!record) {
+      return;
+    }
+    recordingShortcutId = record.dataset.shortcutRecord;
+    void api.setShortcutCapture?.(true);
+    hideError();
+    renderShortcuts(shortcutModelGroups);
+    window.requestAnimationFrame(() => {
+      shortcutGroups.querySelector(
+        `[data-shortcut-record="${cssEscape(recordingShortcutId)}"]`,
+      )?.focus();
+    });
+  }
+
+  function handleRecordedShortcutInput(event) {
+    if (!recordingShortcutId || event.isComposing) {
+      return;
+    }
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    if (event.key === "Escape") {
+      cancelShortcutRecording();
+      return;
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      void updateShortcutBinding(recordingShortcutId, null);
+      return;
+    }
+    const binding = shortcutBindingFromInput(event);
+    if (binding) {
+      void updateShortcutBinding(recordingShortcutId, binding);
+    }
+  }
+
+  async function updateShortcutBinding(id, binding) {
+    const overrides = isRecord(currentPreferences.keyboardShortcuts)
+      ? { ...currentPreferences.keyboardShortcuts }
+      : {};
+    if (binding === undefined) {
+      delete overrides[id];
+    } else {
+      overrides[id] = binding;
+    }
+    const conflict = shortcutConflict(overrides, id);
+    if (conflict) {
+      showError(t("shortcutConflict").replace("{action}", conflict.action));
+      cancelShortcutRecording({ rerender: false });
+      renderShortcuts(shortcutModelGroups);
+      return false;
+    }
+    cancelShortcutRecording({ rerender: false });
+    currentPreferences = {
+      ...currentPreferences,
+      keyboardShortcuts: overrides,
+    };
+    renderShortcuts(shortcutModelGroups);
+    await savePreferencePatch({ keyboardShortcuts: overrides });
+    return true;
+  }
+
+  function resetAllShortcuts() {
+    cancelShortcutRecording({ rerender: false });
+    currentPreferences = {
+      ...currentPreferences,
+      keyboardShortcuts: {},
+    };
+    renderShortcuts(shortcutModelGroups);
+    void savePreferencePatch({ keyboardShortcuts: {} });
+  }
+
+  function cancelShortcutRecording({ rerender = true } = {}) {
+    if (!recordingShortcutId) {
+      return;
+    }
+    recordingShortcutId = "";
+    void api?.setShortcutCapture?.(false);
+    if (rerender) {
+      renderShortcuts(shortcutModelGroups);
+    }
+  }
+
+  function shortcutConflict(overrides, targetId) {
+    const bindings = new Map();
+    for (const group of shortcutModelGroups) {
+      for (const shortcut of group.shortcuts ?? []) {
+        if (!shortcut?.customizable || !shortcut.id) {
+          continue;
+        }
+        const binding = Object.hasOwn(overrides, shortcut.id)
+          ? overrides[shortcut.id]
+          : shortcut.defaultBinding;
+        if (!binding) {
+          continue;
+        }
+        const existing = bindings.get(binding);
+        if (existing) {
+          if (shortcut.id === targetId) {
+            return existing;
+          }
+          if (existing.id === targetId) {
+            return { id: shortcut.id, action: shortcut.action };
+          }
+        }
+        bindings.set(binding, { id: shortcut.id, action: shortcut.action });
+      }
+    }
+    return null;
   }
 
   function renderStatus(value) {
@@ -876,6 +1068,89 @@
   function remoteCheckInterval(value) {
     const number = Number(value);
     return [1, 2, 5, 10, 30, 60, 120].includes(number) ? number : 10;
+  }
+
+  function shortcutBindingFromInput(input) {
+    const key = shortcutKeyFromInput(input);
+    if (!key) {
+      return "";
+    }
+    const isMac = /mac/i.test(navigator.platform || "");
+    const meta = input.metaKey === true || input.meta === true;
+    const control = input.ctrlKey === true || input.control === true;
+    const modifiers = [];
+    if (isMac ? meta : control) {
+      modifiers.push("Mod");
+    }
+    if (isMac && control) {
+      modifiers.push("Ctrl");
+    }
+    if (!isMac && meta) {
+      modifiers.push("Meta");
+    }
+    if (input.altKey === true || input.alt === true) {
+      modifiers.push("Alt");
+    }
+    if (input.shiftKey === true || input.shift === true) {
+      modifiers.push("Shift");
+    }
+    if (!modifiers.some((modifier) => modifier !== "Shift")) {
+      return "";
+    }
+    return [...modifiers, key].join("+");
+  }
+
+  function shortcutKeyFromInput(input) {
+    const code = String(input.code || "");
+    if (/^Key[A-Z]$/.test(code)) {
+      return code.slice(3);
+    }
+    if (/^Digit[0-9]$/.test(code)) {
+      return code.slice(5);
+    }
+    if (/^F(?:[1-9]|1[0-2])$/.test(code)) {
+      return code;
+    }
+    const codeKeys = {
+      Backslash: "\\",
+      BracketLeft: "[",
+      BracketRight: "]",
+      Comma: ",",
+      Equal: "=",
+      Minus: "-",
+      Period: ".",
+      Quote: "'",
+      Semicolon: ";",
+      Slash: "/",
+    };
+    if (codeKeys[code]) {
+      return codeKeys[code];
+    }
+    const key = String(input.key || "");
+    if (/^[a-z]$/i.test(key)) {
+      return key.toUpperCase();
+    }
+    if (/^[0-9]$/.test(key)) {
+      return key;
+    }
+    const namedKeys = {
+      ArrowLeft: "Left",
+      ArrowRight: "Right",
+      ArrowUp: "Up",
+      ArrowDown: "Down",
+      Enter: "Enter",
+      Tab: "Tab",
+      Home: "Home",
+      End: "End",
+      PageUp: "PageUp",
+      PageDown: "PageDown",
+    };
+    return namedKeys[key] || "";
+  }
+
+  function cssEscape(value) {
+    return globalThis.CSS?.escape?.(String(value ?? ""))
+      ?? String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   }
 
   function stringValue(value, fallback = "") {

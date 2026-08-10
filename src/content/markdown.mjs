@@ -183,14 +183,16 @@ function createRenderer(options) {
     env,
     self,
   ) => {
-    const { color, backgroundColor } = tokens[index].meta;
+    const { color, backgroundColor, underline } = tokens[index].meta;
     const classes = [
       color ? "git-leaf-text-color" : "",
       backgroundColor ? "git-leaf-text-highlight" : "",
+      underline ? "git-leaf-text-underline" : "",
     ].filter(Boolean);
     const declarations = [
       color ? `color:${color}` : "",
       backgroundColor ? `background-color:${backgroundColor}` : "",
+      underline ? "text-decoration:underline" : "",
     ].filter(Boolean);
     return [
       `<span class="${classes.join(" ")}" style="${declarations.join(";")}">`,
@@ -488,6 +490,7 @@ function safeTextColorSpanInlineRule(state, silent) {
     token.meta = {
       color: span.color,
       backgroundColor: span.backgroundColor,
+      underline: span.underline,
     };
     token.children = [];
     state.md.inline.parse(span.content, state.md, state.env, token.children);

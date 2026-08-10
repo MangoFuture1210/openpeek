@@ -50,6 +50,7 @@ test("settings center normalizes sections and reuses the shared fresh preference
       fileTreeMode: "all",
       showDocumentTitles: false,
       gitRemoteCheckIntervalMinutes: 30,
+      keyboardShortcuts: {},
     },
   );
 });
@@ -67,6 +68,10 @@ test("settings preference patches and actions expose only approved values", () =
       documentTextSize: 18,
       fileVisibility: "content",
       arbitrary: "value",
+      keyboardShortcuts: {
+        "editor.bold": "Mod+Alt+B",
+        unknown: "Mod+Q",
+      },
     }),
     {
       colorMode: "dark",
@@ -76,6 +81,9 @@ test("settings preference patches and actions expose only approved values", () =
       fileTreeMode: "all",
       showDocumentTitles: false,
       gitRemoteCheckIntervalMinutes: 60,
+      keyboardShortcuts: {
+        "editor.bold": "Mod+Alt+B",
+      },
     },
   );
   assert.deepEqual(normalizeSettingsPreferencePatch({ documentFontSize: 99 }), {
@@ -90,6 +98,10 @@ test("settings preference patches and actions expose only approved values", () =
 
   assert.deepEqual(normalizeSettingsAction("close"), { type: "close" });
   assert.deepEqual(normalizeSettingsAction("check-for-updates"), { type: "check-for-updates" });
+  assert.deepEqual(
+    normalizeSettingsAction({ type: "set-shortcut-capture", active: true }),
+    { type: "set-shortcut-capture", active: true },
+  );
   assert.deepEqual(normalizeSettingsAction({ type: "open-external", url: "https://example.com/help" }), {
     type: "open-external",
     url: "https://example.com/help",
@@ -375,6 +387,56 @@ test("settings IPC authorizes its own view and whitelists model, preference, and
   assert.deepEqual(contentLanguages.at(-1), "en");
   assert.deepEqual(statusLanguages.at(-1), "en");
 
+  const shortcutResult = await harness.ipcMain.invoke(
+    SETTINGS_CENTER_CHANNELS.updatePreferences,
+    sender,
+    { keyboardShortcuts: { "editor.bold": "Mod+Alt+B" } },
+  );
+  assert.deepEqual(savedPatches.at(-1), {
+    keyboardShortcuts: { "editor.bold": "Mod+Alt+B" },
+  });
+  assert.equal(shortcutResult.model.preferences.keyboardShortcuts["editor.bold"], "Mod+Alt+B");
+  await assert.rejects(
+    () => harness.ipcMain.invoke(
+      SETTINGS_CENTER_CHANNELS.updatePreferences,
+      sender,
+      { keyboardShortcuts: { "editor.bold": "Mod+I" } },
+    ),
+    /must be unique/,
+  );
+
+  const captureResult = await harness.ipcMain.invoke(
+    SETTINGS_CENTER_CHANNELS.action,
+    sender,
+    { type: "set-shortcut-capture", active: true },
+  );
+  assert.deepEqual(captureResult, { ok: true, active: true });
+  assert.equal(controller.shortcutCaptureActive, true);
+  assert.equal(controller.captureShortcutInput({
+    key: "b",
+    code: "KeyB",
+    meta: true,
+    alt: true,
+  }), true);
+  assert.deepEqual(sender.messages.at(-1), {
+    channel: SETTINGS_CENTER_CHANNELS.shortcutInput,
+    payload: {
+      key: "b",
+      code: "KeyB",
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: true,
+      isComposing: false,
+    },
+  });
+  await harness.ipcMain.invoke(
+    SETTINGS_CENTER_CHANNELS.action,
+    sender,
+    { type: "set-shortcut-capture", active: false },
+  );
+  assert.equal(controller.shortcutCaptureActive, false);
+
   await harness.ipcMain.invoke(
     SETTINGS_CENTER_CHANNELS.action,
     sender,
@@ -424,6 +486,8 @@ test("settings page and preload keep a bounded renderer security surface", async
   assert.match(preload, /close\(\)/);
   assert.match(preload, /checkForUpdates\(\)/);
   assert.match(preload, /openExternal\(url\)/);
+  assert.match(preload, /setShortcutCapture\(active\)/);
+  assert.match(preload, /onShortcutInput\(listener\)/);
   assert.doesNotMatch(preload, /exposeInMainWorld\([^\n]*ipcRenderer/);
 });
 
