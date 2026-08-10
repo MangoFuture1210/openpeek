@@ -53,6 +53,51 @@ test("horizontal pointer resize follows the captured pointer until release", () 
   controller.destroy();
 });
 
+test("horizontal pointer resize exposes start, end, and cancel lifecycle callbacks", () => {
+  const resizer = createEventTarget();
+  const lifecycle = [];
+  let capturedPointer = null;
+  resizer.setPointerCapture = (pointerId) => {
+    capturedPointer = pointerId;
+  };
+  resizer.hasPointerCapture = (pointerId) => capturedPointer === pointerId;
+  resizer.releasePointerCapture = () => {
+    capturedPointer = null;
+  };
+
+  attachHorizontalPointerResize({
+    resizer,
+    onStart: (clientX) => lifecycle.push(["start", clientX]),
+    onResize: (clientX) => lifecycle.push(["resize", clientX]),
+    onEnd: (clientX) => lifecycle.push(["end", clientX]),
+    onCancel: (clientX) => lifecycle.push(["cancel", clientX]),
+  });
+
+  resizer.emit("pointerdown", {
+    button: 0,
+    clientX: 100,
+    pointerId: 1,
+    preventDefault() {},
+  });
+  resizer.emit("pointerup", { clientX: 160, pointerId: 1 });
+  resizer.emit("pointerdown", {
+    button: 0,
+    clientX: 200,
+    pointerId: 2,
+    preventDefault() {},
+  });
+  resizer.emit("pointercancel", { clientX: 240, pointerId: 2 });
+
+  assert.deepEqual(lifecycle, [
+    ["start", 100],
+    ["resize", 100],
+    ["end", 160],
+    ["start", 200],
+    ["resize", 200],
+    ["cancel", 240],
+  ]);
+});
+
 function createEventTarget() {
   const listeners = new Map();
   return {
@@ -66,7 +111,7 @@ function createEventTarget() {
     },
     emit(type, event) {
       for (const handler of [...(listeners.get(type) ?? [])]) {
-        handler(event);
+        handler({ type, ...event });
       }
     },
   };

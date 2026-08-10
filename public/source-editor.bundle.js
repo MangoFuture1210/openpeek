@@ -36622,6 +36622,7 @@ var WORKBENCH_MESSAGES = Object.freeze({
     "aria.resizeSourcePreview": "Resize Preview and Source editor",
     "aria.sourceEditor": "Source editor",
     "aria.imageActions": "Image actions",
+    "aria.resizeImage": "Drag to resize image",
     "aria.linkActions": "Link actions",
     "aria.frontmatterFieldActions": "Frontmatter field actions",
     "tabs.empty": "No open documents",
@@ -37084,6 +37085,7 @@ var WORKBENCH_MESSAGES = Object.freeze({
     "aria.resizeSourcePreview": "\u8C03\u6574\u9884\u89C8\u548C Source \u7F16\u8F91\u5668\u9AD8\u5EA6",
     "aria.sourceEditor": "Source \u7F16\u8F91\u5668",
     "aria.imageActions": "\u56FE\u7247\u64CD\u4F5C",
+    "aria.resizeImage": "\u62D6\u62FD\u8C03\u6574\u56FE\u7247\u5927\u5C0F",
     "aria.linkActions": "\u94FE\u63A5\u64CD\u4F5C",
     "aria.frontmatterFieldActions": "Frontmatter \u5B57\u6BB5\u64CD\u4F5C",
     "tabs.empty": "\u672A\u6253\u5F00\u6587\u6863",
@@ -40636,6 +40638,12 @@ function imageLineForAction(lineText, action, options = {}) {
     attributes["data-align"] = "center";
   } else if (action === "shrink" || action === "grow") {
     attributes.width = String(nextImageWidth(attributes.width, action));
+  } else if (action === "resize") {
+    const width = normalizeImageWidth2(options.width);
+    if (!width) {
+      return "";
+    }
+    attributes.width = String(width);
   } else if (action === "caption") {
     attributes["data-caption"] = normalizeImageCaption2(options.caption);
   }

@@ -568,6 +568,15 @@ test("Live image toolbar converts Markdown images to editable safe HTML image li
     ),
     '<img src="_assets/report.png" alt="六月报表" width="745" height="181" data-align="center">',
   );
+  assert.equal(
+    imageLineForAction(markdownImage, "resize", { width: 913.6 }),
+    '<img src="_assets/report.png" alt="六月报表" width="914" data-align="left">',
+  );
+  assert.equal(
+    imageLineForAction(markdownImage, "resize", { width: 24 }),
+    '<img src="_assets/report.png" alt="六月报表" width="80" data-align="left">',
+  );
+  assert.equal(imageLineForAction(markdownImage, "resize", { width: "invalid" }), "");
 });
 
 test("livePreviewBlocksForSource previews safe HTML image groups in Live mode", () => {

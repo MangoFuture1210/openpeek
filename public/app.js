@@ -342,6 +342,7 @@ const state = {
   agentContextLoadedScopeKey: "",
   activeAgentContextItemId: "",
   activeImage: null,
+  imageResize: null,
   activeLink: null,
   activeFrontmatterField: null,
   statusTimer: null,
@@ -523,6 +524,8 @@ const agentContextEmpty = document.querySelector("#agent-context-empty");
 const agentContextClear = document.querySelector("#agent-context-clear");
 const agentContextCopy = document.querySelector("#agent-context-copy");
 const imagePopover = document.querySelector("#image-popover");
+const imageResizeHandle = document.querySelector("#image-resize-handle");
+const imageResizeSize = document.querySelector("#image-resize-size");
 const linkPopover = document.querySelector("#link-popover");
 const frontmatterFieldPopover = document.querySelector("#frontmatter-field-popover");
 const copyToast = document.querySelector("#copy-toast");
@@ -620,6 +623,15 @@ attachHorizontalPointerResize({
   activeClass: "is-outline-resizing",
   onResize: setDocumentOutlineWidthFromPointer,
 });
+attachHorizontalPointerResize({
+  resizer: imageResizeHandle,
+  classTarget: previewPane,
+  activeClass: "is-image-resizing",
+  onStart: startImageResize,
+  onResize: updateImageResize,
+  onEnd: finishImageResize,
+  onCancel: cancelImageResize,
+});
 
 if (!canEditCurrentRepo() && isEditingModeName(state.mode)) {
   state.mode = "preview";
@@ -672,6 +684,8 @@ agentContextList.addEventListener("click", handleAgentContextListClick);
 agentContextClear.addEventListener("click", clearAgentContextItems);
 agentContextCopy.addEventListener("click", copyAgentContext);
 imagePopover.addEventListener("click", handleImagePopoverClick);
+imageResizeHandle.addEventListener("click", handleImageResizeHandleClick);
+imageResizeHandle.addEventListener("keydown", handleImageResizeHandleKeydown);
 linkPopover.addEventListener("click", handleLinkPopoverClick);
 frontmatterFieldPopover.addEventListener("click", handleFrontmatterFieldPopoverClick);
 frontmatterFieldPopover.addEventListener("change", handleFrontmatterFieldPopoverChange);
@@ -717,6 +731,7 @@ window.addEventListener("focus", refreshWorktreesOnWindowFocus);
 window.addEventListener("focus", handleRemoteSyncWindowFocus);
 window.addEventListener("resize", positionFrontmatterFilterPopover);
 window.addEventListener("resize", positionWorktreeSwitcherMenu);
+window.addEventListener("resize", positionImagePopover);
 window.addEventListener("resize", scheduleAnchoredSourceLineGutterSync);
 window.addEventListener("resize", () => closeFileActionMenu({ restoreFocus: false }));
 window.addEventListener("pagehide", flushWorkbenchSessionPreference);
@@ -2241,6 +2256,9 @@ function applyDocumentData(
   } = {},
 ) {
   const scrollTop = preserveScroll ? documentContent.scrollTop : 0;
+  const activeImageLine = preserveEditorState && Number.isInteger(state.activeImage?.line)
+    ? state.activeImage.line
+    : null;
   const shouldReplace = forceReplace || shouldReplaceDocumentHtml(state.currentDocument, documentData);
   state.currentDocument = documentData;
   state.currentFile = documentData.path;
@@ -2295,6 +2313,10 @@ function applyDocumentData(
       },
     );
     state.sourceEditor.setMode(state.mode);
+  }
+
+  if (Number.isInteger(activeImageLine)) {
+    restoreActiveImageSelection(activeImageLine);
   }
 
   updateLineSelectionUi();
@@ -3643,6 +3665,7 @@ function handleSourceEditorScroll(sourceMetrics) {
     state.lastSourceVisibleLine = sourceMetrics.visibleLine;
   }
   scheduleSelectionPopoverPosition();
+  positionImagePopover();
   positionLinkPopover();
   positionFrontmatterFieldPopover();
   if (state.mode === "live") {
@@ -8038,6 +8061,7 @@ function handleDocumentChromeClick(event) {
   if (
     !imagePopover.hidden &&
     !closestElement(event.target, ".image-popover") &&
+    !closestElement(event.target, ".image-resize-handle") &&
     !closestElement(event.target, "[data-git-leaf-image]")
   ) {
     clearActiveImage();
@@ -9367,9 +9391,28 @@ function selectImageBlock({ line, image }) {
   positionImagePopover();
 }
 
+function restoreActiveImageSelection(line) {
+  if (!canEditCurrentDocument() || !state.sourceEditor || !Number.isInteger(line)) {
+    return false;
+  }
+
+  const image = state.sourceEditor.imageElement?.(line) ??
+    documentContent.querySelector(`.source-block[data-source-start="${line}"] [data-git-leaf-image]`);
+  if (!image) {
+    return false;
+  }
+
+  state.activeImage = { line, element: image };
+  markActiveImage();
+  positionImagePopover();
+  return true;
+}
+
 function clearActiveImage() {
+  cancelImageResize();
   state.activeImage = null;
   imagePopover.hidden = true;
+  imageResizeHandle.hidden = true;
   for (const frame of document.querySelectorAll(".git-leaf-image-frame.is-selected")) {
     frame.classList.remove("is-selected");
   }
@@ -9386,11 +9429,19 @@ function markActiveImage() {
 function positionImagePopover() {
   if (!state.activeImage || !state.sourceEditor) {
     imagePopover.hidden = true;
+    imageResizeHandle.hidden = true;
     return;
   }
 
   const image = activeImageElement();
   if (!image) {
+    imagePopover.hidden = true;
+    imageResizeHandle.hidden = true;
+    return;
+  }
+
+  positionImageResizeHandle(image);
+  if (state.imageResize) {
     imagePopover.hidden = true;
     return;
   }
@@ -9398,6 +9449,230 @@ function positionImagePopover() {
   imagePopover.hidden = false;
   const imageRect = image.getBoundingClientRect();
   positionLiveEditToolbar(imagePopover, imageRect);
+}
+
+function positionImageResizeHandle(image = activeImageElement()) {
+  if (!image || !state.activeImage) {
+    imageResizeHandle.hidden = true;
+    return;
+  }
+
+  const imageRect = image.getBoundingClientRect();
+  const paneRect = previewPane.getBoundingClientRect();
+  const isVisible = imageRect.width > 0 && imageRect.height > 0 &&
+    imageRect.right >= paneRect.left && imageRect.left <= paneRect.right &&
+    imageRect.bottom >= paneRect.top && imageRect.top <= paneRect.bottom;
+  if (!isVisible) {
+    imageResizeHandle.hidden = true;
+    return;
+  }
+
+  const inset = 11;
+  const left = Math.min(
+    paneRect.width - inset,
+    Math.max(inset, imageRect.right - paneRect.left),
+  );
+  const top = Math.min(
+    paneRect.height - inset,
+    Math.max(inset, imageRect.bottom - paneRect.top),
+  );
+  imageResizeHandle.style.left = `${Math.round(left)}px`;
+  imageResizeHandle.style.top = `${Math.round(top)}px`;
+  imageResizeHandle.hidden = false;
+  setImageResizeSize(state.imageResize?.width ?? imageRect.width, image);
+}
+
+function setImageResizeSize(width, image = activeImageElement()) {
+  const normalizedWidth = normalizeImageWidth(width);
+  if (!normalizedWidth) {
+    return;
+  }
+  const maxWidth = image ? maximumImageResizeWidth(image) : 2000;
+  imageResizeSize.textContent = `${normalizedWidth} px`;
+  imageResizeHandle.setAttribute("aria-valuenow", String(normalizedWidth));
+  imageResizeHandle.setAttribute("aria-valuemax", String(maxWidth));
+}
+
+function maximumImageResizeWidth(image) {
+  const imageRect = image.getBoundingClientRect();
+  const frame = image.closest(".git-leaf-image-frame");
+  const containerRect = frame?.parentElement?.getBoundingClientRect?.();
+  if (!containerRect || containerRect.width <= 0) {
+    return 2000;
+  }
+
+  const align = normalizeImageAlign(
+    image.dataset.imageAlign ?? frame?.dataset.imageAlign,
+  );
+  const availableWidth = align === "center"
+    ? containerRect.width
+    : containerRect.right - imageRect.left;
+  return Math.min(2000, Math.max(80, Math.floor(availableWidth)));
+}
+
+function startImageResize(clientX, event) {
+  event?.stopPropagation?.();
+  const image = activeImageElement();
+  if (!state.activeImage || !image) {
+    return false;
+  }
+
+  const imageRect = image.getBoundingClientRect();
+  if (imageRect.width <= 0) {
+    return false;
+  }
+
+  const frame = image.closest(".git-leaf-image-frame");
+  const align = normalizeImageAlign(
+    image.dataset.imageAlign ?? frame?.dataset.imageAlign,
+  );
+  const maxWidth = maximumImageResizeWidth(image);
+  const startWidth = Math.min(maxWidth, normalizeImageWidth(imageRect.width) || 80);
+  state.imageResize = {
+    line: state.activeImage.line,
+    image,
+    align,
+    startClientX: clientX,
+    startWidth,
+    width: startWidth,
+    maxWidth,
+    moved: false,
+    originalInlineWidth: image.style.width,
+  };
+  imagePopover.hidden = true;
+  imageResizeHandle.classList.add("is-resizing");
+  setImageResizeSize(startWidth, image);
+  return true;
+}
+
+function updateImageResize(clientX, event) {
+  event?.stopPropagation?.();
+  const resize = state.imageResize;
+  if (!resize?.image?.isConnected) {
+    return;
+  }
+
+  const pointerDelta = clientX - resize.startClientX;
+  const widthDelta = resize.align === "center" ? pointerDelta * 2 : pointerDelta;
+  const width = Math.min(
+    resize.maxWidth,
+    Math.max(80, Math.round(resize.startWidth + widthDelta)),
+  );
+  resize.width = width;
+  resize.moved ||= width !== resize.startWidth;
+  resize.image.style.width = `${width}px`;
+  setImageResizeSize(width, resize.image);
+  positionImageResizeHandle(resize.image);
+}
+
+function finishImageResize(clientX, event) {
+  event?.stopPropagation?.();
+  const resize = state.imageResize;
+  if (!resize) {
+    return;
+  }
+
+  updateImageResize(clientX, event);
+  state.imageResize = null;
+  previewPane.classList.remove("is-image-resizing");
+  imageResizeHandle.classList.remove("is-resizing");
+  resize.image.style.removeProperty("width");
+
+  if (!resize.moved || resize.width === resize.startWidth) {
+    restoreImageResizePreview(resize);
+    positionImagePopover();
+    return;
+  }
+
+  if (!commitActiveImageWidth(resize.width)) {
+    restoreImageResizePreview(resize);
+  }
+  markActiveImage();
+  positionImagePopover();
+  window.requestAnimationFrame(() => {
+    markActiveImage();
+    positionImagePopover();
+  });
+}
+
+function cancelImageResize(_clientX, event) {
+  event?.stopPropagation?.();
+  const resize = state.imageResize;
+  if (!resize) {
+    return;
+  }
+
+  state.imageResize = null;
+  previewPane.classList.remove("is-image-resizing");
+  imageResizeHandle.classList.remove("is-resizing");
+  restoreImageResizePreview(resize);
+  window.requestAnimationFrame(positionImagePopover);
+}
+
+function restoreImageResizePreview(resize) {
+  if (!resize?.image?.isConnected) {
+    return;
+  }
+  if (resize.originalInlineWidth) {
+    resize.image.style.width = resize.originalInlineWidth;
+  } else {
+    resize.image.style.removeProperty("width");
+  }
+}
+
+function commitActiveImageWidth(width) {
+  if (!state.activeImage) {
+    return false;
+  }
+
+  const line = state.activeImage.line;
+  const source = state.sourceEditor?.getValue() ?? state.currentDocument?.source ?? "";
+  const currentLine = source.split(/\r?\n/)[line - 1] ?? "";
+  const nextLine = imageLineForAction(currentLine, "resize", { width });
+  if (!nextLine || nextLine === currentLine) {
+    return false;
+  }
+
+  const updated = state.sourceEditor.replaceLine(line, nextLine, { preserveSelection: true });
+  if (!updated) {
+    return false;
+  }
+  updateActiveImageElementFromLine(nextLine);
+  showCopyToast(t("image.updated"));
+  return true;
+}
+
+function handleImageResizeHandleClick(event) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function handleImageResizeHandleKeydown(event) {
+  if (!state.activeImage || !["ArrowLeft", "ArrowRight"].includes(event.key)) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+
+  const image = activeImageElement();
+  if (!image) {
+    return;
+  }
+  const direction = event.key === "ArrowRight" ? 1 : -1;
+  const step = event.shiftKey ? 64 : 16;
+  const currentWidth = normalizeImageWidth(image.getBoundingClientRect().width) || 80;
+  const width = Math.min(
+    maximumImageResizeWidth(image),
+    Math.max(80, currentWidth + direction * step),
+  );
+  if (width === currentWidth || !commitActiveImageWidth(width)) {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    markActiveImage();
+    positionImagePopover();
+    imageResizeHandle.focus({ preventScroll: true });
+  });
 }
 
 function activeImageElement() {
@@ -10123,6 +10398,7 @@ function updateActiveImageElementFromLine(lineText) {
     delete image.dataset.imageCaption;
   }
   if (width) {
+    image.style.removeProperty("width");
     image.setAttribute("width", String(width));
   }
   updateImageCaption(frame, caption);

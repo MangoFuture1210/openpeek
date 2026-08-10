@@ -505,6 +505,19 @@
             <button type="button" data-image-action="caption" data-i18n="action.caption">说明</button>
             <button class="live-edit-toolbar-close" type="button" data-image-action="close" aria-label="关闭" data-i18n-aria-label="action.close">×</button>
           </div>
+          <button
+            id="image-resize-handle"
+            class="image-resize-handle"
+            type="button"
+            role="slider"
+            aria-label="拖拽调整图片大小"
+            data-i18n-aria-label="aria.resizeImage"
+            aria-valuemin="80"
+            aria-valuemax="2000"
+            hidden
+          >
+            <span id="image-resize-size" class="image-resize-size" aria-hidden="true"></span>
+          </button>
           <div
             id="link-popover"
             class="link-popover live-edit-toolbar"

@@ -3492,6 +3492,12 @@ export function imageLineForAction(lineText, action, options = {}) {
     attributes["data-align"] = "center";
   } else if (action === "shrink" || action === "grow") {
     attributes.width = String(nextImageWidth(attributes.width, action));
+  } else if (action === "resize") {
+    const width = normalizeImageWidth(options.width);
+    if (!width) {
+      return "";
+    }
+    attributes.width = String(width);
   } else if (action === "caption") {
     attributes["data-caption"] = normalizeImageCaption(options.caption);
   }
