@@ -461,32 +461,40 @@ preference clears the existing timer and schedules the next check from that mome
 visible window after a missed selected interval also triggers a check. Fetching only updates the
 remote-tracking ref:
 
-- when the current branch is behind and the worktree is clean, Git Leaf applies a safe fast-forward
-  automatically and refreshes the open document without changing its tab or mode;
-- when the worktree has local changes, Git Leaf attempts the same protected object-layer merge used by
-  the explicit action. A conflict-free result advances the local branch automatically while preserving
-  the user's complete local workspace as uncommitted changes;
-- if that protected merge finds a conflict, repository drift, diverged history, or another unsafe
-  condition, it leaves the real branch, index, and files unchanged and exposes **Merge remote changes**
-  as an explicit retry and escalation path. Neither automatic nor explicit down-only merging commits or
-  pushes;
+- when the current branch is behind and the worktree is clean, Git Leaf applies one native fast-forward
+  from the current HEAD directly to the final fetched commit and refreshes the open document without
+  changing its tab or mode;
+- local untracked or staged additions are also eligible only when every path is absent from the old HEAD
+  and its raw bytes and mode exactly match the blob newly added by the final remote tree. Git Leaf adopts
+  those exact blobs into the index before the native fast-forward, then verifies that HEAD, index tree,
+  and worktree all equal the final remote state;
+- any other local change pauses background application before creating a snapshot or writing the real
+  repository. Git Leaf exposes **Merge remote changes** as an explicit action. Neither automatic nor
+  explicit down-only merging commits or pushes;
+- the explicit action may run the protected object-layer merge for a dirty non-sparse worktree. A
+  conflict-free result advances the branch while preserving the user's complete local workspace as
+  uncommitted changes. Conflict, repository drift, diverged history, sparse checkout with local changes,
+  or another unsafe condition leaves the real branch, index, and files unchanged;
 - **Sync and publish** remains the explicit up action. It includes any required remote integration, then
   commits and pushes all local changes.
 
-For a dirty down-only merge, Git Leaf freezes the complete click-time workspace with an alternate Git
+For an explicitly requested dirty down-only merge, Git Leaf freezes the complete click-time workspace with an alternate Git
 index and an immutable snapshot commit. It merges that snapshot with the fetched remote commit in Git's
 object layer. Only a conflict-free result may be applied to the real files, and a final tree comparison
 must match the verified object-layer result. The branch ref advances with a compare-and-swap update, the
 real index resets to the remote commit, and the combined workspace therefore remains uncommitted. A
 short-lived recovery ref protects the frozen snapshot during application. Workspace drift stops before
-mutation; an object-layer conflict leaves the real branch, index, and files unchanged.
+mutation; an object-layer conflict leaves the real branch, index, and files unchanged. Sparse-checkout
+worktrees with local changes stop before this snapshot path because rebuilding an alternate index from
+HEAD could otherwise turn excluded paths into false deletions.
 
 Automatic application uses the remote-tracking ref that the background check just fetched, so network
 latency stays outside the apply phase. Automatic merging then has separate preparation and application
-phases. Preparation creates the immutable snapshot, validates the object-layer merge, and retains a
-short-lived result without changing the real branch, index, or files. It is bound to the inspected local
-HEAD, remote commit, complete workspace fingerprint, and current editor revision; new input or other
-workspace drift discards that result and prepares again after the next editing pause.
+phases. Preparation retains a short-lived clean fast-forward plan without changing the real branch,
+index, or files. It is bound to the inspected local HEAD, final remote commit, complete workspace
+fingerprint, and current editor revision; new input or other workspace drift discards that result and
+prepares again after the next editing pause. Apply phases for the same repository are serialized, and a
+second prepared result must revalidate after the first one finishes before it can mutate anything.
 
 If an incoming path is the focused Source or Live document, the verified result remains visibly pending
 and **Merge remote changes** stays available. Git Leaf applies it automatically after focus leaves the

@@ -136,6 +136,257 @@ test("remote status finds incoming commits and a clean worktree fast-forwards wi
   }
 });
 
+test("automatic remote sync collapses consecutive directory moves into the final clean tree", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-consecutive-remote-merge-");
+  try {
+    const oldDirectory = path.join(fixture.repoRoot, "growth", "reports", "old-month");
+    const coworkerOldDirectory = path.join(fixture.coworker, "growth", "reports", "old-month");
+    await mkdir(oldDirectory, { recursive: true });
+    await writeFile(path.join(oldDirectory, "report.md"), "# Monthly report\n");
+    await writeFile(path.join(oldDirectory, "chart.png"), Buffer.from([1, 2, 3, 4]));
+    await git(fixture.repoRoot, ["add", "-A"]);
+    await git(fixture.repoRoot, ["commit", "-m", "Add old monthly report"]);
+    await git(fixture.repoRoot, ["push", "origin", "main"]);
+    await git(fixture.coworker, ["pull", "--ff-only"]);
+
+    const middleDirectory = path.join(fixture.coworker, "growth", "reports", "middle-month");
+    await rename(coworkerOldDirectory, middleDirectory);
+    await commitAndPush(fixture.coworker, "Move report to intermediate month");
+    await writeFile(
+      path.join(middleDirectory, "report.md"),
+      "# Monthly report\n\nIntermediate metadata\n",
+    );
+    await commitAndPush(fixture.coworker, "Update intermediate report metadata");
+
+    const finalDirectory = path.join(fixture.coworker, "growth", "reports", "final-month");
+    await rename(middleDirectory, finalDirectory);
+    await writeFile(
+      path.join(finalDirectory, "report.md"),
+      "# Monthly report\n\nIntermediate metadata\n\nFinal metadata\n",
+    );
+    await commitAndPush(fixture.coworker, "Move report to final month");
+    const remoteHead = (await git(fixture.bare, ["rev-parse", "main"])).stdout.trim();
+
+    const result = await mergeRemoteChanges({
+      repo: fixture.repo,
+      allowLocalChanges: false,
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.mode, "fast_forward");
+    assert.equal((await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(), remoteHead);
+    assert.equal(
+      (await git(fixture.repoRoot, ["write-tree"])).stdout.trim(),
+      (await git(fixture.repoRoot, ["rev-parse", "HEAD^{tree}"])).stdout.trim(),
+    );
+    assert.equal((await git(fixture.repoRoot, ["status", "--porcelain"])).stdout, "");
+    await assert.rejects(readFile(path.join(oldDirectory, "report.md"), "utf8"));
+    await assert.rejects(readFile(
+      path.join(fixture.repoRoot, "growth", "reports", "middle-month", "report.md"),
+      "utf8",
+    ));
+    assert.equal(
+      normalizeCheckoutLineEndings(await readFile(
+        path.join(fixture.repoRoot, "growth", "reports", "final-month", "report.md"),
+        "utf8",
+      )),
+      "# Monthly report\n\nIntermediate metadata\n\nFinal metadata\n",
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("automatic remote sync adopts byte-identical untracked files before fast-forwarding", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-identical-untracked-merge-");
+  try {
+    const relativePath = "growth/reports/final/chart.png";
+    const bytes = Buffer.from([9, 7, 5, 3, 1]);
+    await mkdir(path.dirname(path.join(fixture.coworker, relativePath)), { recursive: true });
+    await writeFile(path.join(fixture.coworker, relativePath), bytes);
+    await commitAndPush(fixture.coworker, "Add final chart");
+    const localHead = (await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
+    const remoteHead = (await git(fixture.bare, ["rev-parse", "main"])).stdout.trim();
+    await mkdir(path.dirname(path.join(fixture.repoRoot, relativePath)), { recursive: true });
+    await writeFile(path.join(fixture.repoRoot, relativePath), bytes);
+
+    const result = await mergeRemoteChanges({
+      repo: fixture.repo,
+      allowLocalChanges: false,
+    });
+
+    assert.notEqual(localHead, remoteHead);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.mode, "fast_forward");
+    assert.equal((await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(), remoteHead);
+    assert.equal((await git(fixture.repoRoot, ["status", "--porcelain"])).stdout, "");
+    assert.deepEqual(await readFile(path.join(fixture.repoRoot, relativePath)), bytes);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("automatic remote sync resumes after an identical file was staged before interruption", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-staged-identical-merge-");
+  try {
+    const relativePath = "growth/reports/final/chart.png";
+    const bytes = Buffer.from([2, 4, 6, 8]);
+    await mkdir(path.dirname(path.join(fixture.coworker, relativePath)), { recursive: true });
+    await writeFile(path.join(fixture.coworker, relativePath), bytes);
+    await commitAndPush(fixture.coworker, "Add final chart");
+    await git(fixture.repoRoot, ["fetch", "origin"]);
+    const remoteBlob = (await git(fixture.repoRoot, [
+      "rev-parse",
+      `origin/main:${relativePath}`,
+    ])).stdout.trim();
+    await mkdir(path.dirname(path.join(fixture.repoRoot, relativePath)), { recursive: true });
+    await writeFile(path.join(fixture.repoRoot, relativePath), bytes);
+    await git(fixture.repoRoot, [
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      `100644,${remoteBlob},${relativePath}`,
+    ]);
+    assert.equal(
+      (await git(fixture.repoRoot, ["status", "--porcelain", "--", relativePath])).stdout,
+      `A  ${relativePath}\n`,
+    );
+
+    const result = await mergeRemoteChanges({
+      repo: fixture.repo,
+      allowLocalChanges: false,
+      refresh: false,
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.equal((await git(fixture.repoRoot, ["status", "--porcelain"])).stdout, "");
+    assert.equal(
+      (await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(),
+      (await git(fixture.bare, ["rev-parse", "main"])).stdout.trim(),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("automatic remote sync preserves a different untracked file and stops before fast-forward", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-different-untracked-merge-");
+  try {
+    const relativePath = "growth/reports/final/report.md";
+    await mkdir(path.dirname(path.join(fixture.coworker, relativePath)), { recursive: true });
+    await writeFile(path.join(fixture.coworker, relativePath), "remote final\n");
+    await commitAndPush(fixture.coworker, "Add final report");
+    const localHead = (await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
+    await mkdir(path.dirname(path.join(fixture.repoRoot, relativePath)), { recursive: true });
+    await writeFile(path.join(fixture.repoRoot, relativePath), "real local draft\n");
+
+    const result = await mergeRemoteChanges({
+      repo: fixture.repo,
+      allowLocalChanges: false,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "local_changes_require_confirmation");
+    assert.equal((await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(), localHead);
+    assert.equal(await readFile(path.join(fixture.repoRoot, relativePath), "utf8"), "real local draft\n");
+    assert.equal(
+      (await git(fixture.repoRoot, ["status", "--porcelain", "--", relativePath])).stdout,
+      `?? ${relativePath}\n`,
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("dirty sparse checkout stops before snapshotting and preserves skip-worktree entries", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-sparse-dirty-merge-");
+  try {
+    await mkdir(path.join(fixture.repoRoot, "visible"), { recursive: true });
+    await mkdir(path.join(fixture.repoRoot, "archive"), { recursive: true });
+    await writeFile(path.join(fixture.repoRoot, "visible", "draft.md"), "visible before\n");
+    await writeFile(path.join(fixture.repoRoot, "archive", "hidden.md"), "hidden before\n");
+    await git(fixture.repoRoot, ["add", "-A"]);
+    await git(fixture.repoRoot, ["commit", "-m", "Add sparse fixture"]);
+    await git(fixture.repoRoot, ["push", "origin", "main"]);
+    await git(fixture.coworker, ["pull", "--ff-only"]);
+    await git(fixture.repoRoot, ["sparse-checkout", "init", "--cone"]);
+    await git(fixture.repoRoot, ["sparse-checkout", "set", "visible"]);
+    await writeFile(path.join(fixture.repoRoot, "visible", "draft.md"), "local visible draft\n");
+    await writeFile(path.join(fixture.coworker, "archive", "hidden.md"), "hidden remote\n");
+    await commitAndPush(fixture.coworker, "Update hidden report");
+    const localHead = (await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
+
+    const result = await mergeRemoteChanges({
+      repo: fixture.repo,
+      allowLocalChanges: true,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "sparse_checkout_local_changes");
+    assert.equal((await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(), localHead);
+    assert.equal(
+      await readFile(path.join(fixture.repoRoot, "visible", "draft.md"), "utf8"),
+      "local visible draft\n",
+    );
+    await assert.rejects(readFile(path.join(fixture.repoRoot, "archive", "hidden.md"), "utf8"));
+    assert.match(
+      (await git(fixture.repoRoot, ["ls-files", "-v", "--", "archive/hidden.md"])).stdout,
+      /^S archive\/hidden\.md/,
+    );
+    assert.equal(
+      (await git(fixture.repoRoot, ["status", "--porcelain"])).stdout,
+      " M visible/draft.md\n",
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("sparse checkout configuration blocks a dirty merge after a skip-worktree bit is lost", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-sparse-missing-bit-merge-");
+  try {
+    await mkdir(path.join(fixture.repoRoot, "visible"), { recursive: true });
+    await mkdir(path.join(fixture.repoRoot, "archive"), { recursive: true });
+    await writeFile(path.join(fixture.repoRoot, "visible", "draft.md"), "visible before\n");
+    await writeFile(path.join(fixture.repoRoot, "archive", "hidden.md"), "hidden before\n");
+    await git(fixture.repoRoot, ["add", "-A"]);
+    await git(fixture.repoRoot, ["commit", "-m", "Add sparse fixture"]);
+    await git(fixture.repoRoot, ["push", "origin", "main"]);
+    await git(fixture.coworker, ["pull", "--ff-only"]);
+    await git(fixture.repoRoot, ["sparse-checkout", "init", "--cone"]);
+    await git(fixture.repoRoot, ["sparse-checkout", "set", "visible"]);
+    await git(fixture.repoRoot, [
+      "update-index",
+      "--no-skip-worktree",
+      "archive/hidden.md",
+    ]);
+    await writeFile(path.join(fixture.coworker, "remote.md"), "remote after\n");
+    await commitAndPush(fixture.coworker, "Update remote document");
+    const localHead = (await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim();
+    assert.equal(
+      (await git(fixture.repoRoot, ["status", "--porcelain"])).stdout,
+      " D archive/hidden.md\n",
+    );
+
+    const result = await mergeRemoteChanges({
+      repo: fixture.repo,
+      allowLocalChanges: true,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "sparse_checkout_local_changes");
+    assert.equal((await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(), localHead);
+    assert.equal(
+      (await git(fixture.repoRoot, ["status", "--porcelain"])).stdout,
+      " D archive/hidden.md\n",
+    );
+    assert.equal(await readFile(path.join(fixture.repoRoot, "remote.md"), "utf8"), "remote before\n");
+    await assert.rejects(readFile(path.join(fixture.repoRoot, "archive", "hidden.md"), "utf8"));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("explicit remote merge preserves dirty local files as uncommitted changes", async () => {
   const fixture = await createRemoteMergeFixture("git-leaf-dirty-remote-merge-");
   try {
@@ -334,6 +585,69 @@ test("a prepared remote merge is discarded when editing resumes before apply", a
       "local draft continues\n",
     );
     assert.equal(await readFile(path.join(fixture.repoRoot, "remote.md"), "utf8"), "remote before\n");
+  } finally {
+    await preparationStore.dispose();
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent prepared remote merges serialize before mutating one repository", async () => {
+  const fixture = await createRemoteMergeFixture("git-leaf-concurrent-remote-merge-");
+  const preparationStore = createRemoteMergePreparationStore();
+  try {
+    await writeFile(path.join(fixture.coworker, "remote.md"), "remote after\n");
+    await commitAndPush(fixture.coworker, "Remote update");
+    const first = await prepareRemoteChanges({
+      repo: fixture.repo,
+      preparationStore,
+    });
+    const second = await prepareRemoteChanges({
+      repo: fixture.repo,
+      preparationStore,
+      refresh: false,
+    });
+    assert.equal(first.prepared, true, first.error);
+    assert.equal(second.prepared, true, second.error);
+
+    let activeMerges = 0;
+    let maximumActiveMerges = 0;
+    const delayedMergeRunner = async (cwd, args) => {
+      if (args[0] !== "merge") {
+        return git(cwd, args);
+      }
+      activeMerges += 1;
+      maximumActiveMerges = Math.max(maximumActiveMerges, activeMerges);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      try {
+        return await git(cwd, args);
+      } finally {
+        activeMerges -= 1;
+      }
+    };
+
+    const results = await Promise.all([
+      applyPreparedRemoteChanges({
+        repo: fixture.repo,
+        preparationToken: first.preparationToken,
+        preparationStore,
+        gitRunner: delayedMergeRunner,
+      }),
+      applyPreparedRemoteChanges({
+        repo: fixture.repo,
+        preparationToken: second.preparationToken,
+        preparationStore,
+        gitRunner: delayedMergeRunner,
+      }),
+    ]);
+
+    assert.equal(maximumActiveMerges, 1);
+    assert.equal(results.filter((result) => result.ok).length, 1);
+    assert.equal(results.find((result) => !result.ok)?.code, "workspace_changed");
+    assert.equal((await git(fixture.repoRoot, ["status", "--porcelain"])).stdout, "");
+    assert.equal(
+      (await git(fixture.repoRoot, ["rev-parse", "HEAD"])).stdout.trim(),
+      (await git(fixture.bare, ["rev-parse", "main"])).stdout.trim(),
+    );
   } finally {
     await preparationStore.dispose();
     await rm(fixture.root, { recursive: true, force: true });

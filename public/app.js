@@ -169,6 +169,7 @@ import {
   frontmatterLineForValue,
 } from "./frontmatter-edit.js";
 import {
+  AUTOMATIC_REMOTE_MERGE_ALLOW_LOCAL_CHANGES,
   automaticRemoteMergeDelayMs,
   automaticRemoteMergeFailureIsBlocking,
   automaticRemoteMergeShouldWaitForEditor,
@@ -1459,7 +1460,7 @@ async function prepareAutomaticRemoteMerge() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        allowLocalChanges: true,
+        allowLocalChanges: AUTOMATIC_REMOTE_MERGE_ALLOW_LOCAL_CHANGES,
         refresh: false,
         expectedHead,
         expectedRemoteCommit,

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { lstat, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -33,9 +33,10 @@ const REMOTE_SYNC_MESSAGES = {
     "error.diverged": "The current branch and origin/{branch} have diverged. Git Leaf did not rewrite either history.",
     "error.remoteChanged": "The fetched remote version changed before Git Leaf could apply it. Nothing was changed; Git Leaf will check the newer version.",
     "error.preparationExpired": "The prepared remote update expired before it could be applied. Nothing was changed; Git Leaf will prepare it again.",
-    "error.confirmLocalChanges": "Local files changed while Git Leaf checked the remote. Review the changes and choose “Merge remote changes” if you want to continue.",
+    "error.confirmLocalChanges": "Local files have unpublished changes. Git Leaf paused before applying the remote update. Review the changes and choose “Merge remote changes” if you want to continue.",
     "error.workspaceChanged": "The workspace changed while Git Leaf prepared the remote merge. Nothing was applied. Try again after the current edit is saved.",
     "error.conflict": "The remote update conflicts with local edits. Git Leaf did not apply the merge to the real workspace.",
+    "error.sparseCheckoutLocalChanges": "This sparse-checkout worktree has local changes. Git Leaf stopped before changing HEAD, the index, or any files. Finish the merge manually after preserving those edits.",
     "error.rollback": "Git Leaf could not fully roll back an interrupted remote merge. Preserve the recovery ref and hand the repository to an AI Agent.",
     "prompt.title": "Please finish this Git Leaf remote merge:",
     "prompt.repository": "Repository: {repo}",
@@ -59,9 +60,10 @@ const REMOTE_SYNC_MESSAGES = {
     "error.diverged": "当前分支与 origin/{branch} 已经分叉。Git Leaf 没有改写任何一侧的历史。",
     "error.remoteChanged": "准备应用期间，已获取的远端版本发生了变化。Git Leaf 没有修改工作区，并会按较新的版本重新检查。",
     "error.preparationExpired": "远端更新的准备结果在应用前已经失效。Git Leaf 没有修改工作区，并会重新准备。",
-    "error.confirmLocalChanges": "检查远端期间本地文件发生了变化。请查看改动，并在愿意继续时点击“合并远端修改”。",
+    "error.confirmLocalChanges": "本地文件存在未发布修改，Git Leaf 已在应用远端更新前暂停。请查看改动，并在愿意继续时点击“合并远端修改”。",
     "error.workspaceChanged": "准备合并期间工作区仍在变化。Git Leaf 没有应用任何修改；请等待当前编辑保存后重试。",
     "error.conflict": "远端更新与本地编辑发生冲突。Git Leaf 没有把冲突应用到真实工作区。",
+    "error.sparseCheckoutLocalChanges": "当前 sparse-checkout 工作树存在本地修改。Git Leaf 已在改动 HEAD、索引或文件前停止；请先保留这些修改，再手动完成合并。",
     "error.rollback": "Git Leaf 未能完整回退一次中断的远端合并。请保留恢复引用，并交给 AI Agent 处理。",
     "prompt.title": "请继续处理 Git Leaf 的远端合并：",
     "prompt.repository": "仓库：{repo}",
@@ -172,6 +174,27 @@ export async function inspectRemoteSync({
 }
 
 const DEFAULT_REMOTE_MERGE_PREPARATION_TTL_MS = 60_000;
+const remoteMutationQueues = new Map();
+
+async function withRemoteMutationLock(repoRoot, operation) {
+  const key = path.resolve(repoRoot);
+  const previous = remoteMutationQueues.get(key) ?? Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => gate);
+  remoteMutationQueues.set(key, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (remoteMutationQueues.get(key) === tail) {
+      remoteMutationQueues.delete(key);
+    }
+  }
+}
 
 export function createRemoteMergePreparationStore({
   ttlMs = DEFAULT_REMOTE_MERGE_PREPARATION_TTL_MS,
@@ -271,13 +294,17 @@ export async function prepareRemoteChanges({
       "--untracked-files=all",
     ]);
     const changes = repositoryChangesFromPorcelain(status.stdout);
-    if (changes.length === 0) {
+    const redundantRemoteFiles = changes.length > 0
+      ? await byteIdenticalRemoteAdditions({ repo, remote, changes, gitRunner })
+      : [];
+    if (changes.length === 0 || redundantRemoteFiles.length === changes.length) {
       return await prepareCleanRemoteMerge({
         repo,
         remote,
         preparationStore,
         translate,
         gitRunner,
+        redundantRemoteFiles,
       });
     }
     if (!allowLocalChanges) {
@@ -289,6 +316,18 @@ export async function prepareRemoteChanges({
         code: "local_changes_require_confirmation",
         files: changes.map((change) => change.path),
         includeAgentPrompt: false,
+        checkedAt: remote.checkedAt,
+        remote,
+      });
+    }
+    if (await repositoryUsesSparseCheckout(repo, gitRunner)) {
+      return remoteMergeFailure({
+        repo,
+        translate,
+        step: "protect sparse checkout",
+        error: translate("error.sparseCheckoutLocalChanges"),
+        code: "sparse_checkout_local_changes",
+        files: changes.map((change) => change.path),
         checkedAt: remote.checkedAt,
         remote,
       });
@@ -344,72 +383,146 @@ export async function applyPreparedRemoteChanges({
     });
   }
 
-  try {
-    await assertNoGitOperationInProgress(
-      { repo, locale: translate.locale },
-      gitRunner,
-      operationPathExists,
-    );
-    const currentRemoteCommit = parseGitOid(
-      (await runRemoteStep(repo, "confirm remote version", gitRunner, [
-        "rev-parse",
-        "--verify",
-        preparation.remote.remoteRef,
-      ])).stdout,
-      "remote commit",
-    );
-    if (currentRemoteCommit !== preparation.remote.remoteCommit) {
-      return preparedRemoteMergeDriftFailure({
+  return withRemoteMutationLock(repo.root, async () => {
+    try {
+      await assertNoGitOperationInProgress(
+        { repo, locale: translate.locale },
+        gitRunner,
+        operationPathExists,
+      );
+      const currentRemoteCommit = parseGitOid(
+        (await runRemoteStep(repo, "confirm remote version", gitRunner, [
+          "rev-parse",
+          "--verify",
+          preparation.remote.remoteRef,
+        ])).stdout,
+        "remote commit",
+      );
+      if (currentRemoteCommit !== preparation.remote.remoteCommit) {
+        return preparedRemoteMergeDriftFailure({
+          repo,
+          preparation,
+          translate,
+          code: "remote_changed",
+        });
+      }
+      const guard = createGitSyncGuard({ repo, gitRunner });
+      const current = await guard.capture();
+      if (syncStateDriftKind(preparation.baseline, current) !== "none") {
+        return preparedRemoteMergeDriftFailure({
+          repo,
+          preparation,
+          translate,
+          code: "workspace_changed",
+        });
+      }
+      if (preparation.kind === "clean") {
+        return await applyPreparedCleanRemoteMerge({
+          repo,
+          preparation,
+          gitRunner,
+        });
+      }
+      return await applyPreparedDirtyRemoteMerge({
         repo,
         preparation,
         translate,
-        code: "remote_changed",
+        gitRunner,
+        snapshotCommandRunner,
+        guard,
       });
-    }
-    const guard = createGitSyncGuard({ repo, gitRunner });
-    const current = await guard.capture();
-    if (syncStateDriftKind(preparation.baseline, current) !== "none") {
-      return preparedRemoteMergeDriftFailure({
+    } catch (error) {
+      return remoteMergeFailure({
         repo,
-        preparation,
         translate,
-        code: "workspace_changed",
-      });
-    }
-    if (preparation.kind === "clean") {
-      await runRemoteStep(repo, "fast-forward", gitRunner, [
-        "merge",
-        "--ff-only",
-        preparation.remote.remoteCommit,
-      ]);
-      return successfulRemoteMerge({
+        step: error.step ?? "apply prepared remote merge",
+        error: commandErrorText(error, { locale: translate.locale }),
+        code: "merge_failed",
+        files: preparation.remote.incomingFiles,
+        checkedAt: preparation.remote.checkedAt,
         remote: preparation.remote,
-        changes: [],
-        mode: "fast_forward",
       });
+    } finally {
+      await preparation.cleanup();
     }
-    return await applyPreparedDirtyRemoteMerge({
-      repo,
-      preparation,
-      translate,
-      gitRunner,
-      snapshotCommandRunner,
-      guard,
-    });
+  });
+}
+
+async function applyPreparedCleanRemoteMerge({
+  repo,
+  preparation,
+  gitRunner,
+}) {
+  const redundantRemoteFiles = preparation.redundantRemoteFiles ?? [];
+  const newlyStagedPaths = redundantRemoteFiles
+    .filter((entry) => entry.rawStatus === "??")
+    .map((entry) => entry.path);
+  try {
+    for (const entry of redundantRemoteFiles) {
+      await runRemoteStep(repo, "adopt identical remote files", gitRunner, [
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `${entry.mode},${entry.oid},${entry.path}`,
+      ]);
+    }
+    await runRemoteStep(repo, "fast-forward", gitRunner, [
+      "merge",
+      "--ff-only",
+      preparation.remote.remoteCommit,
+    ]);
   } catch (error) {
-    return remoteMergeFailure({
-      repo,
-      translate,
-      step: error.step ?? "apply prepared remote merge",
-      error: commandErrorText(error, { locale: translate.locale }),
-      code: "merge_failed",
-      files: preparation.remote.incomingFiles,
-      checkedAt: preparation.remote.checkedAt,
-      remote: preparation.remote,
-    });
-  } finally {
-    await preparation.cleanup();
+    if (newlyStagedPaths.length > 0) {
+      try {
+        await gitRunner(repo.root, [
+          "reset",
+          "-q",
+          preparation.baseline.head,
+          "--",
+          ...newlyStagedPaths,
+        ]);
+      } catch {
+        // Preserve the original merge error. A staged byte-identical file is
+        // recoverable on the next check and is never deleted or overwritten.
+      }
+    }
+    throw error;
   }
+
+  const finalHead = await readCurrentHead(repo, gitRunner);
+  const finalIndexTree = parseGitOid(
+    (await runRemoteStep(repo, "verify fast-forward index", gitRunner, [
+      "write-tree",
+    ])).stdout,
+    "index tree",
+  );
+  const remoteTree = parseGitOid(
+    (await runRemoteStep(repo, "read remote tree", gitRunner, [
+      "rev-parse",
+      `${preparation.remote.remoteCommit}^{tree}`,
+    ])).stdout,
+    "remote tree",
+  );
+  const finalStatus = await runRemoteStep(repo, "verify fast-forward workspace", gitRunner, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  if (
+    finalHead !== preparation.remote.remoteCommit
+    || finalIndexTree !== remoteTree
+    || String(finalStatus.stdout ?? "") !== ""
+  ) {
+    const error = new Error("The fast-forward did not leave HEAD, the index, and the workspace consistent.");
+    error.step = "verify fast-forward workspace";
+    throw error;
+  }
+  return successfulRemoteMerge({
+    remote: preparation.remote,
+    changes: [],
+    mode: "fast_forward",
+  });
 }
 
 export async function cancelPreparedRemoteChanges({
@@ -454,13 +567,24 @@ async function prepareCleanRemoteMerge({
   preparationStore,
   translate,
   gitRunner,
+  redundantRemoteFiles = [],
 }) {
   const guard = createGitSyncGuard({ repo, gitRunner });
   const baseline = await guard.capture();
-  const clean = await guard.isWorktreeClean();
+  const status = await runRemoteStep(repo, "status", gitRunner, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  const changes = repositoryChangesFromPorcelain(status.stdout);
+  const confirmedRedundantFiles = changes.length > 0
+    ? await byteIdenticalRemoteAdditions({ repo, remote, changes, gitRunner })
+    : [];
   const afterCheck = await guard.capture();
   if (
-    !clean
+    confirmedRedundantFiles.length !== changes.length
+    || !sameRemoteAdditionSet(redundantRemoteFiles, confirmedRedundantFiles)
     || baseline.head !== remote.head
     || syncStateDriftKind(baseline, afterCheck) !== "none"
   ) {
@@ -479,6 +603,7 @@ async function prepareCleanRemoteMerge({
     remote,
     baseline,
     changedFiles: [],
+    redundantRemoteFiles: confirmedRedundantFiles,
     cleanup: async () => {},
   });
   return preparedRemoteMergePayload({
@@ -739,6 +864,131 @@ async function applyPreparedDirtyRemoteMerge({
       remote,
     });
   }
+}
+
+async function byteIdenticalRemoteAdditions({
+  repo,
+  remote,
+  changes,
+  gitRunner,
+}) {
+  if (!changes.every((change) => change.rawStatus === "??" || change.rawStatus === "A ")) {
+    return [];
+  }
+
+  const additions = [];
+  for (const change of changes) {
+    const [headEntry, remoteEntry] = await Promise.all([
+      gitTreeEntry(repo, remote.head, change.path, gitRunner),
+      gitTreeEntry(repo, remote.remoteCommit, change.path, gitRunner),
+    ]);
+    if (
+      headEntry
+      || remoteEntry?.type !== "blob"
+      || !["100644", "100755"].includes(remoteEntry.mode)
+    ) {
+      return [];
+    }
+    const localFile = await lstat(path.join(repo.root, change.path));
+    const localExecutable = (localFile.mode & 0o111) !== 0;
+    if (
+      !localFile.isFile()
+      || localExecutable !== (remoteEntry.mode === "100755")
+    ) {
+      return [];
+    }
+    const localOid = parseGitOid(
+      (await runRemoteStep(repo, "hash local remote file", gitRunner, [
+        "hash-object",
+        "--no-filters",
+        "--",
+        change.path,
+      ])).stdout,
+      "local file blob",
+    );
+    if (localOid !== remoteEntry.oid) {
+      return [];
+    }
+    if (change.rawStatus === "A ") {
+      const indexOid = parseGitOid(
+        (await runRemoteStep(repo, "read staged remote file", gitRunner, [
+          "rev-parse",
+          "--verify",
+          `:${change.path}`,
+        ])).stdout,
+        "staged file blob",
+      );
+      if (indexOid !== remoteEntry.oid) {
+        return [];
+      }
+    }
+    additions.push({
+      path: change.path,
+      rawStatus: change.rawStatus,
+      mode: remoteEntry.mode,
+      oid: remoteEntry.oid,
+    });
+  }
+  return additions;
+}
+
+async function gitTreeEntry(repo, commit, file, gitRunner) {
+  const output = String((await runRemoteStep(repo, "read tree entry", gitRunner, [
+    "ls-tree",
+    "--full-tree",
+    "-z",
+    commit,
+    "--",
+    file,
+  ])).stdout ?? "");
+  for (const record of output.split("\0")) {
+    if (!record) continue;
+    const separator = record.indexOf("\t");
+    if (separator < 0 || record.slice(separator + 1) !== file) continue;
+    const [mode, type, oid] = record.slice(0, separator).split(/\s+/);
+    return {
+      mode,
+      type,
+      oid: parseGitOid(oid, "tree entry blob"),
+    };
+  }
+  return null;
+}
+
+async function repositoryUsesSparseCheckout(repo, gitRunner) {
+  try {
+    const configured = await gitRunner(repo.root, [
+      "config",
+      "--bool",
+      "--get",
+      "core.sparseCheckout",
+    ]);
+    if (String(configured.stdout ?? "").trim() === "true") {
+      return true;
+    }
+  } catch (error) {
+    if (Number(error?.code) !== 1) {
+      error.step = "inspect sparse checkout";
+      throw error;
+    }
+  }
+  const output = String((await runRemoteStep(repo, "inspect sparse checkout", gitRunner, [
+    "ls-files",
+    "-v",
+    "-z",
+  ])).stdout ?? "");
+  return output.split("\0").some((record) => record.startsWith("S "));
+}
+
+function sameRemoteAdditionSet(expected, actual) {
+  const normalizedExpected = expected
+    .map(({ path: file, rawStatus, mode, oid }) => `${file}\0${rawStatus}\0${mode}\0${oid}`)
+    .sort();
+  const normalizedActual = actual
+    .map(({ path: file, rawStatus, mode, oid }) => `${file}\0${rawStatus}\0${mode}\0${oid}`)
+    .sort();
+  return normalizedExpected.length === normalizedActual.length
+    && normalizedExpected.every((entry, index) => entry === normalizedActual[index]);
 }
 
 function remoteMergePreflightFailure({

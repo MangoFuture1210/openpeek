@@ -3,6 +3,10 @@ import {
   normalizeGitRemoteCheckIntervalMinutes,
 } from "./settings-preferences.js";
 
+// Background sync may fetch and fast-forward, but it must never merge through
+// real local edits without an explicit user action.
+export const AUTOMATIC_REMOTE_MERGE_ALLOW_LOCAL_CHANGES = false;
+
 export function remoteSyncIntervalMs(
   intervalMinutes = DEFAULT_USER_PREFERENCES.gitRemoteCheckIntervalMinutes,
 ) {

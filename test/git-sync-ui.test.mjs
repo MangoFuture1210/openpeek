@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AUTOMATIC_REMOTE_MERGE_ALLOW_LOCAL_CHANGES,
   automaticRemoteMergeDelayMs,
   automaticRemoteMergeFailureIsBlocking,
   automaticRemoteMergeShouldWaitForEditor,
@@ -11,6 +12,10 @@ import {
   remoteSyncDecision,
   remoteSyncIntervalMs,
 } from "../public/git-sync-ui.js";
+
+test("automatic remote merging never writes through a dirty workspace", () => {
+  assert.equal(AUTOMATIC_REMOTE_MERGE_ALLOW_LOCAL_CHANGES, false);
+});
 
 test("identical background git status does not invalidate the file tree", () => {
   const changes = [
@@ -101,7 +106,7 @@ test("an affected focused editor keeps a prepared automatic merge pending", () =
   }), true);
 });
 
-test("incoming changes auto-merge with clean or dirty local workspaces", () => {
+test("incoming changes trigger preparation for clean or dirty local workspaces", () => {
   const remote = { ok: true, behind: 2 };
 
   assert.deepEqual(remoteSyncDecision({

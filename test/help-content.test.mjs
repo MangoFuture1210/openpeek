@@ -30,8 +30,10 @@ test("Git Leaf help explains stable filtering and all repository files", () => {
   assert.match(text, /无分支/);
   assert.match(text, /自动创建保护分支/);
   assert.match(text, /默认每隔 10 分钟/);
+  assert.match(text, /逐字节相同/);
+  assert.match(text, /后台自动更新会暂停/);
   assert.match(text, /合并远端修改/);
-  assert.match(text, /全部本地编辑仍保持未提交/);
+  assert.match(text, /全部本地编辑保持未提交/);
   assert.match(text, /同步并发布/);
   assert.match(text, /只有万不得已才使用.*AI Agent 提示词/);
   assert.match(text, /分享文档/);
