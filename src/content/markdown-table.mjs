@@ -21,6 +21,10 @@ const MARKDOWN_TABLE_HIGHLIGHT_COLOR_VALUES = new Set(
   MARKDOWN_TABLE_HIGHLIGHT_COLORS.map(({ value }) => value),
 );
 const TABLE_SEPARATOR_CELL = /^:?-{3,}:?$/;
+const TABLE_COLUMN_WIDTHS_LINE =
+  /^\s*\[git-leaf-table-widths\]:\s*#\s*(?:"([^"]+)"|'([^']+)'|\(([^)]+)\))\s*$/i;
+export const MARKDOWN_TABLE_MIN_COLUMN_WIDTH = 64;
+export const MARKDOWN_TABLE_MAX_COLUMN_WIDTH = 1600;
 const CONTROLLED_TABLE_STYLE_SPAN =
   /^<span\s+style=(["'])([^"'\n]*)\1\s*>([^\n]*?)<\/span>/i;
 const MARKDOWN_TABLE_TEXT_STYLES = new Set([
@@ -39,6 +43,114 @@ export function normalizeMarkdownTableHighlightColor(value) {
   return MARKDOWN_TABLE_HIGHLIGHT_COLOR_VALUES.has(normalized)
     ? normalized
     : null;
+}
+
+export function normalizeMarkdownTableColumnWidths(widths, columnCount = null) {
+  if (!Array.isArray(widths)) {
+    return null;
+  }
+  if (
+    Number.isInteger(columnCount) &&
+    columnCount > 0 &&
+    widths.length !== columnCount
+  ) {
+    return null;
+  }
+  if (widths.length === 0) {
+    return null;
+  }
+
+  const normalized = widths.map((value) => Math.round(Number(value)));
+  if (normalized.some((value) => (
+    !Number.isFinite(value) ||
+    value < MARKDOWN_TABLE_MIN_COLUMN_WIDTH ||
+    value > MARKDOWN_TABLE_MAX_COLUMN_WIDTH
+  ))) {
+    return null;
+  }
+  return normalized;
+}
+
+export function parseMarkdownTableColumnWidthsLine(line, columnCount = null) {
+  const match = TABLE_COLUMN_WIDTHS_LINE.exec(String(line ?? ""));
+  if (!match) {
+    return null;
+  }
+  const values = (match[1] ?? match[2] ?? match[3] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return normalizeMarkdownTableColumnWidths(values, columnCount);
+}
+
+export function serializeMarkdownTableColumnWidths(widths) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  return normalized
+    ? `[git-leaf-table-widths]: # "${normalized.join(",")}"`
+    : null;
+}
+
+export function reorderMarkdownTableColumnWidths(widths, fromColumn, toColumn) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  if (
+    !normalized ||
+    !Number.isInteger(fromColumn) ||
+    !Number.isInteger(toColumn) ||
+    fromColumn < 0 ||
+    toColumn < 0 ||
+    fromColumn >= normalized.length ||
+    toColumn >= normalized.length
+  ) {
+    return null;
+  }
+  return moveArrayItem(normalized, fromColumn, toColumn);
+}
+
+export function insertMarkdownTableColumnWidth(
+  widths,
+  column,
+  referenceColumn = Math.min(column, widths?.length - 1),
+) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  if (
+    !normalized ||
+    !Number.isInteger(column) ||
+    !Number.isInteger(referenceColumn) ||
+    column < 0 ||
+    column > normalized.length ||
+    referenceColumn < 0 ||
+    referenceColumn >= normalized.length
+  ) {
+    return null;
+  }
+
+  const neighbor = normalized[referenceColumn];
+  const next = [...normalized];
+  next.splice(column, 0, neighbor);
+  return next;
+}
+
+export function deleteMarkdownTableColumnWidths(
+  widths,
+  fromColumn,
+  toColumn = fromColumn,
+) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  if (
+    !normalized ||
+    !Number.isInteger(fromColumn) ||
+    !Number.isInteger(toColumn) ||
+    fromColumn < 0 ||
+    toColumn < fromColumn ||
+    toColumn >= normalized.length ||
+    toColumn - fromColumn + 1 >= normalized.length
+  ) {
+    return null;
+  }
+
+  const next = [...normalized];
+  next.splice(fromColumn, toColumn - fromColumn + 1);
+  return next;
 }
 
 export function controlledTableStyleSpanAt(source) {
@@ -254,7 +366,27 @@ export function markdownTableBlockAtLines(lines, index) {
 
   const source = lines.slice(index, endIndex + 1).join("\n");
   const table = parseMarkdownTable(source);
-  return table ? { endIndex, source, table } : null;
+  if (!table) {
+    return null;
+  }
+  const metadataIndex = index > 0 && parseMarkdownTableColumnWidthsLine(
+    lines[index - 1],
+  )
+    ? index - 1
+    : null;
+  const columnWidths = metadataIndex === null
+    ? null
+    : parseMarkdownTableColumnWidthsLine(
+      lines[metadataIndex],
+      table.columnCount,
+    );
+  return {
+    endIndex,
+    source,
+    table,
+    metadataIndex,
+    columnWidths,
+  };
 }
 
 export function normalizeMarkdownTableSelection(selection, table) {
@@ -431,6 +563,178 @@ export function replaceMarkdownTableCell(source, row, column, content) {
     changed: nextSource !== table.source,
     row,
     column,
+  };
+}
+
+export function insertMarkdownTableRow(source, selection, placement = "below") {
+  const table = parseMarkdownTable(source);
+  const normalizedSelection = normalizeMarkdownTableSelection(selection, table);
+  if (
+    !table ||
+    !normalizedSelection ||
+    !["above", "below"].includes(placement)
+  ) {
+    return null;
+  }
+
+  const insertionRow = placement === "above"
+    ? Math.max(1, normalizedSelection.minRow)
+    : Math.max(1, normalizedSelection.maxRow + 1);
+  const insertionLine = insertionRow >= table.rowCount
+    ? table.lines.length
+    : table.visualRows[insertionRow].lineIndex;
+  const templateRow = table.rowCount > 1
+    ? table.visualRows[Math.min(insertionRow, table.rowCount - 1)]
+    : table.visualRows[0];
+  const emptyCells = templateRow.cells.map((cell) =>
+    cellRawWithContent(cell, ""));
+  const nextLines = [...table.lines];
+  nextLines.splice(
+    insertionLine,
+    0,
+    serializeMarkdownTableRow(templateRow, emptyCells),
+  );
+
+  return {
+    source: nextLines.join(table.newline),
+    changed: true,
+    insertedRow: insertionRow,
+    selection: {
+      anchorRow: insertionRow,
+      anchorColumn: normalizedSelection.minColumn,
+      focusRow: insertionRow,
+      focusColumn: normalizedSelection.maxColumn,
+    },
+  };
+}
+
+export function deleteMarkdownTableRows(source, selection) {
+  const table = parseMarkdownTable(source);
+  const normalizedSelection = normalizeMarkdownTableSelection(selection, table);
+  if (!table || !normalizedSelection) {
+    return null;
+  }
+
+  const firstRow = Math.max(1, normalizedSelection.minRow);
+  const lastRow = normalizedSelection.maxRow;
+  if (lastRow < firstRow) {
+    return null;
+  }
+
+  const nextLines = [...table.lines];
+  const lineIndexes = table.visualRows
+    .slice(firstRow, lastRow + 1)
+    .map((row) => row.lineIndex)
+    .sort((left, right) => right - left);
+  for (const lineIndex of lineIndexes) {
+    nextLines.splice(lineIndex, 1);
+  }
+  const nextSource = nextLines.join(table.newline);
+  const nextTable = parseMarkdownTable(nextSource);
+  if (!nextTable) {
+    return null;
+  }
+  const nextRow = nextTable.rowCount > 1
+    ? Math.min(firstRow, nextTable.rowCount - 1)
+    : 0;
+
+  return {
+    source: nextSource,
+    changed: true,
+    deletedRows: { from: firstRow, to: lastRow },
+    selection: {
+      anchorRow: nextRow,
+      anchorColumn: normalizedSelection.minColumn,
+      focusRow: nextRow,
+      focusColumn: normalizedSelection.maxColumn,
+    },
+  };
+}
+
+export function insertMarkdownTableColumn(
+  source,
+  selection,
+  placement = "right",
+) {
+  const table = parseMarkdownTable(source);
+  const normalizedSelection = normalizeMarkdownTableSelection(selection, table);
+  if (
+    !table ||
+    !normalizedSelection ||
+    !["left", "right"].includes(placement)
+  ) {
+    return null;
+  }
+
+  const insertionColumn = placement === "left"
+    ? normalizedSelection.minColumn
+    : normalizedSelection.maxColumn + 1;
+  const templateColumn = Math.min(insertionColumn, table.columnCount - 1);
+  const nextLines = [...table.lines];
+  for (const row of table.sourceRows) {
+    const nextCells = row.cells.map((cell) => cell.raw);
+    const content = row === table.separator ? "---" : "";
+    nextCells.splice(
+      insertionColumn,
+      0,
+      cellRawWithContent(row.cells[templateColumn], content),
+    );
+    nextLines[row.lineIndex] = serializeMarkdownTableRow(row, nextCells);
+  }
+
+  return {
+    source: nextLines.join(table.newline),
+    changed: true,
+    insertedColumn: insertionColumn,
+    referenceColumn: placement === "left"
+      ? normalizedSelection.minColumn
+      : normalizedSelection.maxColumn,
+    selection: {
+      anchorRow: normalizedSelection.minRow,
+      anchorColumn: insertionColumn,
+      focusRow: normalizedSelection.maxRow,
+      focusColumn: insertionColumn,
+    },
+  };
+}
+
+export function deleteMarkdownTableColumns(source, selection) {
+  const table = parseMarkdownTable(source);
+  const normalizedSelection = normalizeMarkdownTableSelection(selection, table);
+  if (!table || !normalizedSelection) {
+    return null;
+  }
+
+  const deletedColumnCount =
+    normalizedSelection.maxColumn - normalizedSelection.minColumn + 1;
+  if (deletedColumnCount >= table.columnCount) {
+    return null;
+  }
+
+  const nextLines = [...table.lines];
+  for (const row of table.sourceRows) {
+    const nextCells = row.cells.map((cell) => cell.raw);
+    nextCells.splice(normalizedSelection.minColumn, deletedColumnCount);
+    nextLines[row.lineIndex] = serializeMarkdownTableRow(row, nextCells);
+  }
+  const nextColumn = Math.min(
+    normalizedSelection.minColumn,
+    table.columnCount - deletedColumnCount - 1,
+  );
+
+  return {
+    source: nextLines.join(table.newline),
+    changed: true,
+    deletedColumns: {
+      from: normalizedSelection.minColumn,
+      to: normalizedSelection.maxColumn,
+    },
+    selection: {
+      anchorRow: normalizedSelection.minRow,
+      anchorColumn: nextColumn,
+      focusRow: normalizedSelection.maxRow,
+      focusColumn: nextColumn,
+    },
   };
 }
 

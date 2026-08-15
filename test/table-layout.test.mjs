@@ -158,3 +158,19 @@ test("tableLayoutAttributes scrolls wide tables with many columns", () => {
   assert.equal(layout.mode, "scroll");
   assert.match(renderTableColgroup(layout), /<col style="width: \d+px">/);
 });
+
+test("explicit table column widths are authoritative and sum to the table width", () => {
+  const layout = tableLayoutAttributes({
+    columnNames: ["Item", "Details", "Status"],
+    cellsByColumn: [["A"], ["Long details"], ["Ready"]],
+    columnWidths: [120, 280, 96],
+  });
+
+  assert.equal(layout.mode, "manual");
+  assert.equal(layout.preferredWidth, 496);
+  assert.deepEqual(layout.columns.map(({ width }) => width), [120, 280, 96]);
+  assert.equal(
+    renderTableColgroup(layout),
+    '<colgroup><col style="width: 120px"><col style="width: 280px"><col style="width: 96px"></colgroup>',
+  );
+});

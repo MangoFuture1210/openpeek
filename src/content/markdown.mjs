@@ -1,7 +1,10 @@
 import MarkdownIt from "markdown-it";
 
 import { createTranslator } from "../../public/i18n.js";
-import { controlledTableStyleSpanAt } from "./markdown-table.mjs";
+import {
+  controlledTableStyleSpanAt,
+  parseMarkdownTableColumnWidthsLine,
+} from "./markdown-table.mjs";
 import { mdxLiteBlockRule, renderMdxLiteComponent } from "./mdx-lite.mjs";
 import {
   renderTableToolbar,
@@ -57,7 +60,12 @@ export function renderMarkdown(markdown, options = {}) {
     ...options,
     locale: translate.locale,
   });
-  return renderer.render(source, { lineOffset, translate });
+  return renderer.render(source, {
+    lineOffset,
+    translate,
+    sourceLines: source.split(/\r?\n/),
+    tableColumnWidths: options.tableColumnWidths ?? null,
+  });
 }
 
 export function extractTitle(markdown, fallbackPath) {
@@ -347,7 +355,12 @@ function createRenderer(options) {
   renderer.renderer.rules.table_open = (tokens, index, rendererOptions, env) => {
     const shape = tableShapeFromTokens(tokens, index);
     const attributes = tableComplexityAttributes(shape);
-    const layout = tableLayoutAttributes(shape);
+    const columnWidths = tableColumnWidthsForToken(
+      tokens[index],
+      env,
+      shape.columns,
+    );
+    const layout = tableLayoutAttributes({ ...shape, columnWidths });
     return [
       sourceBlockOpen(tokens[index], env, {
         lineLayout: "table",
@@ -363,6 +376,23 @@ function createRenderer(options) {
   renderer.renderer.rules.table_close = () => "</table></div></div>" + sourceBlockClose();
 
   return renderer;
+}
+
+function tableColumnWidthsForToken(token, env, columnCount) {
+  const explicitWidths = Array.isArray(env.tableColumnWidths)
+    ? env.tableColumnWidths
+    : null;
+  if (explicitWidths) {
+    return explicitWidths;
+  }
+  const tableStartIndex = token?.map?.[0];
+  if (!Number.isInteger(tableStartIndex) || tableStartIndex < 1) {
+    return null;
+  }
+  return parseMarkdownTableColumnWidthsLine(
+    env.sourceLines?.[tableStartIndex - 1],
+    columnCount,
+  );
 }
 
 function fenceLanguage(token) {

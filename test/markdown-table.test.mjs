@@ -10,15 +10,24 @@ import {
   colorMarkdownTableCellContent,
   controlledTableStyleSpanAt,
   controlledTextColorSpanAt,
+  deleteMarkdownTableColumns,
+  deleteMarkdownTableColumnWidths,
+  deleteMarkdownTableRows,
   formatMarkdownTableCellContent,
+  insertMarkdownTableColumn,
+  insertMarkdownTableColumnWidth,
+  insertMarkdownTableRow,
   markdownTableBlockAtLines,
   markdownTableSelectionFormatState,
+  parseMarkdownTableColumnWidthsLine,
   normalizeMarkdownTableSelection,
   parseMarkdownTable,
   parseMarkdownTableCellFormat,
   parseMarkdownTableRow,
   reorderMarkdownTableColumn,
+  reorderMarkdownTableColumnWidths,
   replaceMarkdownTableCell,
+  serializeMarkdownTableColumnWidths,
 } from "../src/content/markdown-table.mjs";
 
 const tableSource = [
@@ -58,6 +67,125 @@ test("markdownTableBlockAtLines stops before a non-table line", () => {
   const block = markdownTableBlockAtLines(lines, 0);
   assert.equal(block?.endIndex, 3);
   assert.equal(block?.table.rowCount, 3);
+});
+
+test("Markdown table column widths round-trip through adjacent hidden metadata", () => {
+  const metadata = serializeMarkdownTableColumnWidths([128, 244, 96]);
+  const lines = [metadata, ...tableSource.split("\n")];
+  const block = markdownTableBlockAtLines(lines, 1);
+
+  assert.equal(metadata, '[git-leaf-table-widths]: # "128,244,96"');
+  assert.deepEqual(parseMarkdownTableColumnWidthsLine(metadata, 3), [128, 244, 96]);
+  assert.equal(block?.metadataIndex, 0);
+  assert.deepEqual(block?.columnWidths, [128, 244, 96]);
+  assert.equal(parseMarkdownTableColumnWidthsLine(metadata, 2), null);
+});
+
+test("reordering a Markdown table column reorders its persisted width", () => {
+  assert.deepEqual(
+    reorderMarkdownTableColumnWidths([128, 244, 96], 0, 2),
+    [244, 96, 128],
+  );
+});
+
+test("inserting and deleting Markdown table columns keeps width metadata aligned", () => {
+  assert.deepEqual(
+    insertMarkdownTableColumnWidth([128, 244, 96], 1),
+    [128, 244, 244, 96],
+  );
+  assert.deepEqual(
+    insertMarkdownTableColumnWidth([128, 244, 96], 3),
+    [128, 244, 96, 96],
+  );
+  assert.deepEqual(
+    deleteMarkdownTableColumnWidths([128, 244, 96], 1, 1),
+    [128, 96],
+  );
+  assert.equal(
+    deleteMarkdownTableColumnWidths([128, 244, 96], 0, 2),
+    null,
+  );
+});
+
+test("Markdown table rows can be inserted around and deleted from a selection", () => {
+  const selection = {
+    anchorRow: 1,
+    anchorColumn: 0,
+    focusRow: 1,
+    focusColumn: 2,
+  };
+  const inserted = insertMarkdownTableRow(tableSource, selection, "below");
+  const insertedTable = parseMarkdownTable(inserted?.source);
+  assert.equal(insertedTable?.rowCount, 4);
+  assert.deepEqual(
+    insertedTable?.visualRows[2].cells.map((cell) => cell.content),
+    ["", "", ""],
+  );
+  assert.deepEqual(inserted?.selection, {
+    anchorRow: 2,
+    anchorColumn: 0,
+    focusRow: 2,
+    focusColumn: 2,
+  });
+
+  const deleted = deleteMarkdownTableRows(inserted.source, {
+    anchorRow: 1,
+    anchorColumn: 0,
+    focusRow: 2,
+    focusColumn: 2,
+  });
+  assert.equal(parseMarkdownTable(deleted?.source)?.rowCount, 2);
+  assert.equal(
+    parseMarkdownTable(deleted?.source)?.visualRows[1].cells[0].content,
+    "付费投放",
+  );
+  assert.equal(deleteMarkdownTableRows(tableSource, {
+    anchorRow: 0,
+    anchorColumn: 0,
+    focusRow: 0,
+    focusColumn: 2,
+  }), null);
+});
+
+test("Markdown table columns can be inserted beside and deleted across a selection", () => {
+  const inserted = insertMarkdownTableColumn(tableSource, {
+    anchorRow: 0,
+    anchorColumn: 0,
+    focusRow: 2,
+    focusColumn: 0,
+  }, "right");
+  const insertedTable = parseMarkdownTable(inserted?.source);
+  assert.equal(insertedTable?.columnCount, 4);
+  assert.deepEqual(
+    insertedTable?.visualRows.map((row) => row.cells[1].content),
+    ["", "", ""],
+  );
+  assert.equal(insertedTable?.alignments[1], "left");
+  assert.deepEqual(inserted?.selection, {
+    anchorRow: 0,
+    anchorColumn: 1,
+    focusRow: 2,
+    focusColumn: 1,
+  });
+
+  const deleted = deleteMarkdownTableColumns(inserted.source, {
+    anchorRow: 0,
+    anchorColumn: 1,
+    focusRow: 2,
+    focusColumn: 2,
+  });
+  const deletedTable = parseMarkdownTable(deleted?.source);
+  assert.equal(deletedTable?.columnCount, 2);
+  assert.deepEqual(
+    deletedTable?.visualRows[0].cells.map((cell) => cell.content),
+    ["渠道", "状态"],
+  );
+  assert.equal(deleteMarkdownTableColumns(tableSource, {
+    anchorRow: 0,
+    anchorColumn: 0,
+    focusRow: 2,
+    focusColumn: 2,
+  }), null);
 });
 
 test("normalizeMarkdownTableSelection turns diagonal dragging into a rectangle", () => {
