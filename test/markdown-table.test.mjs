@@ -13,12 +13,15 @@ import {
   formatMarkdownTableCellContent,
   markdownTableBlockAtLines,
   markdownTableSelectionFormatState,
+  parseMarkdownTableColumnWidthsLine,
   normalizeMarkdownTableSelection,
   parseMarkdownTable,
   parseMarkdownTableCellFormat,
   parseMarkdownTableRow,
   reorderMarkdownTableColumn,
+  reorderMarkdownTableColumnWidths,
   replaceMarkdownTableCell,
+  serializeMarkdownTableColumnWidths,
 } from "../src/content/markdown-table.mjs";
 
 const tableSource = [
@@ -58,6 +61,25 @@ test("markdownTableBlockAtLines stops before a non-table line", () => {
   const block = markdownTableBlockAtLines(lines, 0);
   assert.equal(block?.endIndex, 3);
   assert.equal(block?.table.rowCount, 3);
+});
+
+test("Markdown table column widths round-trip through adjacent hidden metadata", () => {
+  const metadata = serializeMarkdownTableColumnWidths([128, 244, 96]);
+  const lines = [metadata, ...tableSource.split("\n")];
+  const block = markdownTableBlockAtLines(lines, 1);
+
+  assert.equal(metadata, '[git-leaf-table-widths]: # "128,244,96"');
+  assert.deepEqual(parseMarkdownTableColumnWidthsLine(metadata, 3), [128, 244, 96]);
+  assert.equal(block?.metadataIndex, 0);
+  assert.deepEqual(block?.columnWidths, [128, 244, 96]);
+  assert.equal(parseMarkdownTableColumnWidthsLine(metadata, 2), null);
+});
+
+test("reordering a Markdown table column reorders its persisted width", () => {
+  assert.deepEqual(
+    reorderMarkdownTableColumnWidths([128, 244, 96], 0, 2),
+    [244, 96, 128],
+  );
 });
 
 test("normalizeMarkdownTableSelection turns diagonal dragging into a rectangle", () => {

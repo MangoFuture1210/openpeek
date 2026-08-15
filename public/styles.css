@@ -4410,6 +4410,10 @@ summary.has-operation-feedback {
   width: 100%;
 }
 
+.table-card[data-table-layout="manual"] {
+  width: min(var(--table-preferred-width), 100%);
+}
+
 .mdx-component {
   margin: 18px 0;
 }
@@ -4716,6 +4720,11 @@ summary.has-operation-feedback {
   overflow-y: hidden;
 }
 
+.table-scroll[data-table-layout="manual"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .table-scroll[data-table-layout="fit"] table,
 .table-scroll[data-table-layout="wrap"] table {
   width: 100%;
@@ -4727,6 +4736,13 @@ summary.has-operation-feedback {
 .table-scroll[data-table-layout="scroll"] table {
   width: var(--table-preferred-width);
   min-width: var(--table-min-width);
+  max-width: none;
+  table-layout: fixed;
+}
+
+.table-scroll[data-table-layout="manual"] table {
+  width: var(--table-preferred-width);
+  min-width: var(--table-preferred-width);
   max-width: none;
   table-layout: fixed;
 }
@@ -4877,7 +4893,8 @@ tr:last-child td {
 }
 
 .cm-live-table-format-toolbar[hidden],
-.cm-live-table-column-handle[hidden] {
+.cm-live-table-column-handle[hidden],
+.cm-live-table-resize-handle[hidden] {
   display: none;
 }
 
@@ -5158,6 +5175,56 @@ tr:last-child td {
 
 .cm-live-table-column-handle.is-dragging {
   cursor: grabbing;
+}
+
+.cm-live-table-resize-handle {
+  position: fixed;
+  z-index: 43;
+  width: 12px;
+  min-width: 12px;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  padding: 0;
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.cm-live-table-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: transparent;
+  content: "";
+  transform: translateX(-50%);
+  transition:
+    width 100ms ease,
+    background-color 100ms ease;
+}
+
+.cm-live-block-preview-table:hover .cm-live-table-resize-handle::after,
+.cm-live-table-resize-handle:focus-visible::after,
+.cm-live-table-resize-handle.is-table-edge::after {
+  background: color-mix(in srgb, var(--panel-border) 78%, transparent);
+}
+
+.cm-live-table-resize-handle:hover::after,
+.cm-live-table-resize-handle:focus-visible::after,
+.cm-live-table-resize-handle.is-dragging::after {
+  width: 3px;
+  background: var(--accent);
+}
+
+.cm-live-table-resize-handle:focus-visible {
+  outline: none;
+}
+
+.cm-live-block-preview-table.is-resizing-columns,
+.cm-live-block-preview-table.is-resizing-columns * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .error-message {

@@ -21,6 +21,10 @@ const MARKDOWN_TABLE_HIGHLIGHT_COLOR_VALUES = new Set(
   MARKDOWN_TABLE_HIGHLIGHT_COLORS.map(({ value }) => value),
 );
 const TABLE_SEPARATOR_CELL = /^:?-{3,}:?$/;
+const TABLE_COLUMN_WIDTHS_LINE =
+  /^\s*\[git-leaf-table-widths\]:\s*#\s*(?:"([^"]+)"|'([^']+)'|\(([^)]+)\))\s*$/i;
+export const MARKDOWN_TABLE_MIN_COLUMN_WIDTH = 64;
+export const MARKDOWN_TABLE_MAX_COLUMN_WIDTH = 1600;
 const CONTROLLED_TABLE_STYLE_SPAN =
   /^<span\s+style=(["'])([^"'\n]*)\1\s*>([^\n]*?)<\/span>/i;
 const MARKDOWN_TABLE_TEXT_STYLES = new Set([
@@ -39,6 +43,67 @@ export function normalizeMarkdownTableHighlightColor(value) {
   return MARKDOWN_TABLE_HIGHLIGHT_COLOR_VALUES.has(normalized)
     ? normalized
     : null;
+}
+
+export function normalizeMarkdownTableColumnWidths(widths, columnCount = null) {
+  if (!Array.isArray(widths)) {
+    return null;
+  }
+  if (
+    Number.isInteger(columnCount) &&
+    columnCount > 0 &&
+    widths.length !== columnCount
+  ) {
+    return null;
+  }
+  if (widths.length === 0) {
+    return null;
+  }
+
+  const normalized = widths.map((value) => Math.round(Number(value)));
+  if (normalized.some((value) => (
+    !Number.isFinite(value) ||
+    value < MARKDOWN_TABLE_MIN_COLUMN_WIDTH ||
+    value > MARKDOWN_TABLE_MAX_COLUMN_WIDTH
+  ))) {
+    return null;
+  }
+  return normalized;
+}
+
+export function parseMarkdownTableColumnWidthsLine(line, columnCount = null) {
+  const match = TABLE_COLUMN_WIDTHS_LINE.exec(String(line ?? ""));
+  if (!match) {
+    return null;
+  }
+  const values = (match[1] ?? match[2] ?? match[3] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return normalizeMarkdownTableColumnWidths(values, columnCount);
+}
+
+export function serializeMarkdownTableColumnWidths(widths) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  return normalized
+    ? `[git-leaf-table-widths]: # "${normalized.join(",")}"`
+    : null;
+}
+
+export function reorderMarkdownTableColumnWidths(widths, fromColumn, toColumn) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  if (
+    !normalized ||
+    !Number.isInteger(fromColumn) ||
+    !Number.isInteger(toColumn) ||
+    fromColumn < 0 ||
+    toColumn < 0 ||
+    fromColumn >= normalized.length ||
+    toColumn >= normalized.length
+  ) {
+    return null;
+  }
+  return moveArrayItem(normalized, fromColumn, toColumn);
 }
 
 export function controlledTableStyleSpanAt(source) {
@@ -254,7 +319,27 @@ export function markdownTableBlockAtLines(lines, index) {
 
   const source = lines.slice(index, endIndex + 1).join("\n");
   const table = parseMarkdownTable(source);
-  return table ? { endIndex, source, table } : null;
+  if (!table) {
+    return null;
+  }
+  const metadataIndex = index > 0 && parseMarkdownTableColumnWidthsLine(
+    lines[index - 1],
+  )
+    ? index - 1
+    : null;
+  const columnWidths = metadataIndex === null
+    ? null
+    : parseMarkdownTableColumnWidthsLine(
+      lines[metadataIndex],
+      table.columnCount,
+    );
+  return {
+    endIndex,
+    source,
+    table,
+    metadataIndex,
+    columnWidths,
+  };
 }
 
 export function normalizeMarkdownTableSelection(selection, table) {

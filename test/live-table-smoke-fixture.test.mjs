@@ -28,6 +28,8 @@ test("Live table smoke fixture provides native editable table scenarios", () => 
     assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /正在编辑的单元格/);
     assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /固定在表格顶部/);
     assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /至少两个单元格/);
+    assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /最右侧分割线只调整最后一列/);
+    assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /重新打开后仍保留/);
     assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /Esc 关闭/);
     assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /粗体、斜体、删除线/);
     assert.match(LIVE_TABLE_SMOKE_ACCEPTANCE, /清除文字格式不改变列对齐/);

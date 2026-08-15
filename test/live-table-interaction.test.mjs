@@ -7,7 +7,10 @@ import {
   createLiveTableInteraction,
   isVerticalTableColumnSelection,
 } from "../src/client/source-editor.mjs";
-import { parseMarkdownTable } from "../src/content/markdown-table.mjs";
+import {
+  markdownTableBlockAtLines,
+  parseMarkdownTable,
+} from "../src/content/markdown-table.mjs";
 
 const tableSource = [
   "| A | B | C |",
@@ -195,6 +198,133 @@ test("a partial vertical range exposes the column handle and reorders the whole 
     [3, 2],
   ]);
   assert.equal(fixture.handle.hidden, false);
+});
+
+test("dragging a column divider persists only that column width", async () => {
+  const fixture = liveTableFixture();
+  await nextTask();
+
+  fixture.interaction.handlePointerDown(pointerEvent(fixture.resizeHandles[1], {
+    pointerId: 51,
+    clientX: 340,
+    clientY: 250,
+  }));
+  fixture.interaction.handlePointerMove(pointerEvent(fixture.resizeHandles[1], {
+    type: "pointermove",
+    pointerId: 51,
+    clientX: 400,
+    clientY: 250,
+  }));
+
+  assert.equal(fixture.columns[0].style.width, "120px");
+  assert.equal(fixture.columns[1].style.width, "180px");
+  assert.equal(fixture.columns[2].style.width, "120px");
+  assert.equal(fixture.table.style.width, "420px");
+
+  fixture.interaction.handlePointerUp(pointerEvent(fixture.resizeHandles[1], {
+    type: "pointerup",
+    pointerId: 51,
+    clientX: 400,
+    clientY: 250,
+  }));
+  await nextTask();
+
+  const lines = fixture.view.state.doc.toString().split("\n");
+  assert.equal(lines[0], '[git-leaf-table-widths]: # "120,180,120"');
+  assert.deepEqual(
+    markdownTableBlockAtLines(lines, 1)?.columnWidths,
+    [120, 180, 120],
+  );
+});
+
+test("the far-right divider resizes only the final column", async () => {
+  const fixture = liveTableFixture();
+  await nextTask();
+
+  fixture.interaction.handlePointerDown(pointerEvent(fixture.resizeHandles[2], {
+    pointerId: 52,
+    clientX: 460,
+    clientY: 250,
+  }));
+  fixture.interaction.handlePointerMove(pointerEvent(fixture.resizeHandles[2], {
+    type: "pointermove",
+    pointerId: 52,
+    clientX: 540,
+    clientY: 250,
+  }));
+  fixture.interaction.handlePointerUp(pointerEvent(fixture.resizeHandles[2], {
+    type: "pointerup",
+    pointerId: 52,
+    clientX: 540,
+    clientY: 250,
+  }));
+  await nextTask();
+
+  const lines = fixture.view.state.doc.toString().split("\n");
+  assert.deepEqual(
+    markdownTableBlockAtLines(lines, 1)?.columnWidths,
+    [120, 120, 200],
+  );
+});
+
+test("reordering a persisted column keeps its width attached to that column", async () => {
+  const source = [
+    '[git-leaf-table-widths]: # "100,150,110"',
+    tableSource,
+  ].join("\n");
+  const fixture = liveTableFixture({
+    source,
+    startLine: 2,
+    columnWidths: [100, 150, 110],
+  });
+  const first = fixture.cell(1, 0);
+  const last = fixture.cell(3, 0);
+
+  fixture.interaction.handlePointerDown(pointerEvent(first, {
+    pointerId: 53,
+    clientX: 150,
+    clientY: 260,
+  }));
+  fixture.document.pointTarget = last;
+  fixture.interaction.handlePointerMove(pointerEvent(last, {
+    type: "pointermove",
+    pointerId: 53,
+    clientX: 150,
+    clientY: 340,
+  }));
+  fixture.interaction.handlePointerUp(pointerEvent(last, {
+    type: "pointerup",
+    pointerId: 53,
+    clientX: 150,
+    clientY: 340,
+  }));
+
+  fixture.interaction.handlePointerDown(pointerEvent(fixture.handle, {
+    pointerId: 54,
+    clientX: 150,
+    clientY: 190,
+  }));
+  fixture.interaction.handlePointerMove(pointerEvent(fixture.handle, {
+    type: "pointermove",
+    pointerId: 54,
+    clientX: 405,
+    clientY: 190,
+  }));
+  fixture.interaction.handlePointerUp(pointerEvent(fixture.handle, {
+    type: "pointerup",
+    pointerId: 54,
+    clientX: 405,
+    clientY: 190,
+  }));
+  await nextTask();
+
+  const lines = fixture.view.state.doc.toString().split("\n");
+  const block = markdownTableBlockAtLines(lines, 1);
+  assert.deepEqual(block?.columnWidths, [150, 110, 100]);
+  assert.deepEqual(
+    block?.table.visualRows[0].cells.map((cell) => cell.content),
+    ["B", "C", "A"],
+  );
 });
 
 test("the table-top toolbar closes through its close button and Escape", async () => {
@@ -399,20 +529,47 @@ test("only a vertical multi-cell range qualifies for column reordering", () => {
   }), false);
 });
 
-function liveTableFixture() {
+function liveTableFixture({
+  source = tableSource,
+  startLine = 1,
+  columnWidths = [120, 120, 120],
+} = {}) {
   const document = new FakeDocument();
   const root = document.createElement("div");
   const container = document.createElement("div");
   container.className = "cm-live-block-preview-table";
-  container.dataset.liveBlockStart = "1";
+  container.dataset.liveBlockStart = String(startLine);
   root.append(container);
+
+  const card = document.createElement("div");
+  card.className = "table-card";
+  card.dataset.tableLayout = "fit";
+  container.append(card);
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll";
+  scroll.dataset.tableLayout = "fit";
+  card.append(scroll);
 
   const table = document.createElement("table");
   table.className = "cm-live-table";
-  table.rect = rect(100, 200, 360, 160);
-  container.append(table);
+  const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+  table.rect = rect(100, 200, tableWidth, 160);
+  scroll.rect = { ...table.rect };
+  scroll.append(table);
+
+  const colgroup = document.createElement("colgroup");
+  const columns = Array.from({ length: 3 }, (_, index) => {
+    const column = document.createElement("col");
+    column.style.width = `${columnWidths[index]}px`;
+    colgroup.append(column);
+    return column;
+  });
+  table.append(colgroup);
 
   const cells = [];
+  const columnLefts = columnWidths.map((_, index) => (
+    100 + columnWidths.slice(0, index).reduce((sum, width) => sum + width, 0)
+  ));
   for (let row = 0; row < 4; row += 1) {
     for (let column = 0; column < 3; column += 1) {
       const cell = document.createElement(row === 0 ? "th" : "td");
@@ -420,7 +577,12 @@ function liveTableFixture() {
       cell.dataset.liveTableRow = String(row);
       cell.dataset.liveTableColumn = String(column);
       cell.innerHTML = `${String.fromCharCode(65 + column)}${row || ""}`;
-      cell.rect = rect(100 + column * 120, 200 + row * 40, 120, 40);
+      cell.rect = rect(
+        columnLefts[column],
+        200 + row * 40,
+        columnWidths[column],
+        40,
+      );
       table.append(cell);
       cells.push(cell);
     }
@@ -477,9 +639,19 @@ function liveTableFixture() {
   handle.rect = rect(0, 0, 30, 22);
   container.append(handle);
 
+  const resizeHandles = Array.from({ length: 3 }, (_, column) => {
+    const resizeHandle = document.createElement("button");
+    resizeHandle.className = "cm-live-table-resize-handle";
+    resizeHandle.dataset.liveTableResizeHandle = "true";
+    resizeHandle.dataset.liveTableResizeColumn = String(column);
+    resizeHandle.hidden = true;
+    container.append(resizeHandle);
+    return resizeHandle;
+  });
+
   const view = {
     dom: root,
-    state: EditorState.create({ doc: tableSource }),
+    state: EditorState.create({ doc: source }),
     dispatch(spec) {
       this.state = this.state.update(spec).state;
     },
@@ -500,6 +672,7 @@ function liveTableFixture() {
     document,
     root,
     table,
+    columns,
     view,
     interaction,
     toolbar,
@@ -512,6 +685,7 @@ function liveTableFixture() {
     clearFormatButton,
     closeButton,
     handle,
+    resizeHandles,
     cell(row, column) {
       return cells.find((candidate) => (
         Number(candidate.dataset.liveTableRow) === row &&

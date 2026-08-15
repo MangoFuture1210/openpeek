@@ -1,3 +1,5 @@
+import { normalizeMarkdownTableColumnWidths } from "./markdown-table.mjs";
+
 const WIDTHS = {
   number: { min: 64, max: 108 },
   date: { min: 96, max: 132 },
@@ -18,7 +20,12 @@ const MINIMUM_READABLE_WIDTH_BY_COLUMN_COUNT = new Map([
   [7, 820],
 ]);
 
-export function tableLayoutAttributes({ columns = [], columnNames: namedColumns = [], cellsByColumn = [] } = {}) {
+export function tableLayoutAttributes({
+  columns = [],
+  columnNames: namedColumns = [],
+  cellsByColumn = [],
+  columnWidths = null,
+} = {}) {
   const sourceColumns = Array.isArray(namedColumns) && namedColumns.length > 0
     ? namedColumns
     : Array.isArray(columns)
@@ -27,6 +34,23 @@ export function tableLayoutAttributes({ columns = [], columnNames: namedColumns 
   const columnNames = sourceColumns.length > 0
     ? sourceColumns
     : Array.from({ length: cellsByColumn.length }, (_, index) => `Column ${index + 1}`);
+  const explicitWidths = normalizeMarkdownTableColumnWidths(
+    columnWidths,
+    columnNames.length,
+  );
+  if (explicitWidths) {
+    const preferredWidth = explicitWidths.reduce((sum, width) => sum + width, 0);
+    return {
+      mode: "manual",
+      preferredWidth,
+      minWidth: preferredWidth,
+      columns: explicitWidths.map((width) => ({
+        kind: "manual",
+        width,
+        minWidth: width,
+      })),
+    };
+  }
   const measuredColumns = columnNames.map((column, index) =>
     columnLayout(column, cellsByColumn[index] ?? []),
   );
@@ -81,7 +105,7 @@ export function renderTableColgroup(layout) {
   return [
     "<colgroup>",
     layout.columns.map((column) => {
-      const width = layout.mode === "scroll"
+      const width = layout.mode === "scroll" || layout.mode === "manual"
         ? `${column.width}px`
         : `${Number(((column.width / layout.preferredWidth) * 100).toFixed(4))}%`;
       return `<col style="width: ${width}">`;

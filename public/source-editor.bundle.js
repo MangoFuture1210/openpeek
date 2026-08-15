@@ -33460,6 +33460,9 @@ var MARKDOWN_TABLE_HIGHLIGHT_COLOR_VALUES = new Set(
   MARKDOWN_TABLE_HIGHLIGHT_COLORS.map(({ value }) => value)
 );
 var TABLE_SEPARATOR_CELL = /^:?-{3,}:?$/;
+var TABLE_COLUMN_WIDTHS_LINE = /^\s*\[git-leaf-table-widths\]:\s*#\s*(?:"([^"]+)"|'([^']+)'|\(([^)]+)\))\s*$/i;
+var MARKDOWN_TABLE_MIN_COLUMN_WIDTH = 64;
+var MARKDOWN_TABLE_MAX_COLUMN_WIDTH = 1600;
 var CONTROLLED_TABLE_STYLE_SPAN = /^<span\s+style=(["'])([^"'\n]*)\1\s*>([^\n]*?)<\/span>/i;
 var MARKDOWN_TABLE_TEXT_STYLES = /* @__PURE__ */ new Set([
   "bold",
@@ -33473,6 +33476,41 @@ function normalizeMarkdownTableTextColor(value) {
 function normalizeMarkdownTableHighlightColor(value) {
   const normalized = String(value ?? "").trim().toLowerCase();
   return MARKDOWN_TABLE_HIGHLIGHT_COLOR_VALUES.has(normalized) ? normalized : null;
+}
+function normalizeMarkdownTableColumnWidths(widths, columnCount = null) {
+  if (!Array.isArray(widths)) {
+    return null;
+  }
+  if (Number.isInteger(columnCount) && columnCount > 0 && widths.length !== columnCount) {
+    return null;
+  }
+  if (widths.length === 0) {
+    return null;
+  }
+  const normalized = widths.map((value) => Math.round(Number(value)));
+  if (normalized.some((value) => !Number.isFinite(value) || value < MARKDOWN_TABLE_MIN_COLUMN_WIDTH || value > MARKDOWN_TABLE_MAX_COLUMN_WIDTH)) {
+    return null;
+  }
+  return normalized;
+}
+function parseMarkdownTableColumnWidthsLine(line, columnCount = null) {
+  const match2 = TABLE_COLUMN_WIDTHS_LINE.exec(String(line ?? ""));
+  if (!match2) {
+    return null;
+  }
+  const values2 = (match2[1] ?? match2[2] ?? match2[3] ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  return normalizeMarkdownTableColumnWidths(values2, columnCount);
+}
+function serializeMarkdownTableColumnWidths(widths) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  return normalized ? `[git-leaf-table-widths]: # "${normalized.join(",")}"` : null;
+}
+function reorderMarkdownTableColumnWidths(widths, fromColumn, toColumn) {
+  const normalized = normalizeMarkdownTableColumnWidths(widths);
+  if (!normalized || !Number.isInteger(fromColumn) || !Number.isInteger(toColumn) || fromColumn < 0 || toColumn < 0 || fromColumn >= normalized.length || toColumn >= normalized.length) {
+    return null;
+  }
+  return moveArrayItem(normalized, fromColumn, toColumn);
 }
 function controlledTableStyleSpanAt(source) {
   const match2 = CONTROLLED_TABLE_STYLE_SPAN.exec(String(source ?? ""));
@@ -33642,7 +33680,23 @@ function markdownTableBlockAtLines(lines, index) {
   }
   const source = lines.slice(index, endIndex + 1).join("\n");
   const table2 = parseMarkdownTable(source);
-  return table2 ? { endIndex, source, table: table2 } : null;
+  if (!table2) {
+    return null;
+  }
+  const metadataIndex = index > 0 && parseMarkdownTableColumnWidthsLine(
+    lines[index - 1]
+  ) ? index - 1 : null;
+  const columnWidths = metadataIndex === null ? null : parseMarkdownTableColumnWidthsLine(
+    lines[metadataIndex],
+    table2.columnCount
+  );
+  return {
+    endIndex,
+    source,
+    table: table2,
+    metadataIndex,
+    columnWidths
+  };
 }
 function normalizeMarkdownTableSelection(selection, table2) {
   if (!selection || !table2) {
@@ -34104,9 +34158,31 @@ var MINIMUM_READABLE_WIDTH_BY_COLUMN_COUNT = /* @__PURE__ */ new Map([
   [6, 720],
   [7, 820]
 ]);
-function tableLayoutAttributes({ columns = [], columnNames: namedColumns = [], cellsByColumn = [] } = {}) {
+function tableLayoutAttributes({
+  columns = [],
+  columnNames: namedColumns = [],
+  cellsByColumn = [],
+  columnWidths = null
+} = {}) {
   const sourceColumns = Array.isArray(namedColumns) && namedColumns.length > 0 ? namedColumns : Array.isArray(columns) ? columns : [];
   const columnNames = sourceColumns.length > 0 ? sourceColumns : Array.from({ length: cellsByColumn.length }, (_, index) => `Column ${index + 1}`);
+  const explicitWidths = normalizeMarkdownTableColumnWidths(
+    columnWidths,
+    columnNames.length
+  );
+  if (explicitWidths) {
+    const preferredWidth2 = explicitWidths.reduce((sum, width) => sum + width, 0);
+    return {
+      mode: "manual",
+      preferredWidth: preferredWidth2,
+      minWidth: preferredWidth2,
+      columns: explicitWidths.map((width) => ({
+        kind: "manual",
+        width,
+        minWidth: width
+      }))
+    };
+  }
   const measuredColumns = columnNames.map(
     (column, index) => columnLayout(column, cellsByColumn[index] ?? [])
   );
@@ -34148,7 +34224,7 @@ function renderTableColgroup(layout) {
   return [
     "<colgroup>",
     layout.columns.map((column) => {
-      const width = layout.mode === "scroll" ? `${column.width}px` : `${Number((column.width / layout.preferredWidth * 100).toFixed(4))}%`;
+      const width = layout.mode === "scroll" || layout.mode === "manual" ? `${column.width}px` : `${Number((column.width / layout.preferredWidth * 100).toFixed(4))}%`;
       return `<col style="width: ${width}">`;
     }).join(""),
     "</colgroup>"
@@ -35790,7 +35866,12 @@ function renderMarkdown(markdown2, options = {}) {
     ...options,
     locale: translate.locale
   });
-  return renderer.render(source, { lineOffset, translate });
+  return renderer.render(source, {
+    lineOffset,
+    translate,
+    sourceLines: source.split(/\r?\n/),
+    tableColumnWidths: options.tableColumnWidths ?? null
+  });
 }
 function createRenderer(options) {
   const renderer = new lib_default({
@@ -35966,7 +36047,12 @@ function createRenderer(options) {
   renderer.renderer.rules.table_open = (tokens, index, rendererOptions, env) => {
     const shape = tableShapeFromTokens(tokens, index);
     const attributes = tableComplexityAttributes(shape);
-    const layout = tableLayoutAttributes(shape);
+    const columnWidths = tableColumnWidthsForToken(
+      tokens[index],
+      env,
+      shape.columns
+    );
+    const layout = tableLayoutAttributes({ ...shape, columnWidths });
     return [
       sourceBlockOpen(tokens[index], env, {
         lineLayout: "table",
@@ -35980,6 +36066,20 @@ function createRenderer(options) {
   };
   renderer.renderer.rules.table_close = () => "</table></div></div>" + sourceBlockClose();
   return renderer;
+}
+function tableColumnWidthsForToken(token, env, columnCount) {
+  const explicitWidths = Array.isArray(env.tableColumnWidths) ? env.tableColumnWidths : null;
+  if (explicitWidths) {
+    return explicitWidths;
+  }
+  const tableStartIndex = token?.map?.[0];
+  if (!Number.isInteger(tableStartIndex) || tableStartIndex < 1) {
+    return null;
+  }
+  return parseMarkdownTableColumnWidthsLine(
+    env.sourceLines?.[tableStartIndex - 1],
+    columnCount
+  );
 }
 function fenceLanguage(token) {
   return String(token?.info ?? "").trim().split(/\s+/, 1)[0].toLowerCase();
@@ -37990,6 +38090,7 @@ function isRemoteImageSource(source) {
 // src/client/source-editor.mjs
 var livePreviewEnterEffect = StateEffect.define();
 var livePreviewExitEffect = StateEffect.define();
+var preserveEditorContextAnnotation = Annotation.define();
 var sourceEditorSetup = [
   minimalSetup,
   lineNumbers(),
@@ -38133,7 +38234,8 @@ var SOURCE_EDITOR_TABLE_MESSAGES = {
     "align.center": "Align selected columns center",
     "align.right": "Align selected columns right",
     "cell.edit": "Edit table cell source",
-    "column.drag": "Drag to reorder the selected column"
+    "column.drag": "Drag to reorder the selected column",
+    "column.resize": "Drag to resize column {column}"
   },
   "zh-CN": {
     "toolbar.label": "\u8868\u683C\u683C\u5F0F",
@@ -38161,7 +38263,8 @@ var SOURCE_EDITOR_TABLE_MESSAGES = {
     "align.center": "\u9009\u4E2D\u5217\u5C45\u4E2D\u5BF9\u9F50",
     "align.right": "\u9009\u4E2D\u5217\u53F3\u5BF9\u9F50",
     "cell.edit": "\u7F16\u8F91\u8868\u683C\u5355\u5143\u683C\u6E90\u7801",
-    "column.drag": "\u62D6\u52A8\u8C03\u6574\u9009\u4E2D\u5217\u7684\u987A\u5E8F"
+    "column.drag": "\u62D6\u52A8\u8C03\u6574\u9009\u4E2D\u5217\u7684\u987A\u5E8F",
+    "column.resize": "\u62D6\u52A8\u8C03\u6574\u7B2C {column} \u5217\u5BBD\u5EA6"
   }
 };
 var SOURCE_EDITOR_COMPONENT_MESSAGES = {
@@ -39045,6 +39148,7 @@ function createSourceEditor({
   }
   view = new EditorView({
     doc: doc2,
+    dispatchTransactions: dispatchEditorTransactions,
     extensions: [
       sourceEditorSetup,
       markdown(),
@@ -39281,7 +39385,7 @@ function createSourceEditor({
       };
       suppressChange = true;
       try {
-        view.dispatch({
+        view.dispatch(preserveEditorContext({
           changes,
           effects: remoteMergeHighlightEffect.of(
             highlightChanges ? {
@@ -39289,7 +39393,7 @@ function createSourceEditor({
               to: changes.from + String(changes.insert ?? "").length
             } : null
           )
-        });
+        }, preserveSelection));
       } finally {
         suppressChange = false;
       }
@@ -39405,14 +39509,14 @@ function createSourceEditor({
           to: line.to,
           insert: String(text2 ?? "")
         },
-        scrollIntoView: true
+        scrollIntoView: !preserveSelection
       };
       if (!preserveSelection) {
         transaction.selection = {
           anchor: line.from + String(text2 ?? "").length
         };
       }
-      view.dispatch(transaction);
+      view.dispatch(preserveEditorContext(transaction, preserveSelection));
       return true;
     },
     lineRect(lineNumber) {
@@ -39465,28 +39569,33 @@ function createSourceEditor({
         ].join("")
       );
     },
-    replaceDocument(value) {
+    replaceDocument(value, { preserveSelection = true } = {}) {
       const nextValue = String(value ?? "");
-      view.dispatch({
-        changes: {
-          from: 0,
-          to: view.state.doc.length,
-          insert: nextValue
-        },
-        scrollIntoView: true
-      });
+      const currentValue = view.state.doc.toString();
+      if (currentValue === nextValue) {
+        return false;
+      }
+      const changes = preserveSelection ? minimalDocumentChange(currentValue, nextValue) : {
+        from: 0,
+        to: view.state.doc.length,
+        insert: nextValue
+      };
+      view.dispatch(preserveEditorContext({
+        changes,
+        scrollIntoView: !preserveSelection
+      }, preserveSelection));
       return true;
     },
-    deleteLine(lineNumber) {
+    deleteLine(lineNumber, { preserveSelection = true } = {}) {
       if (!Number.isInteger(lineNumber) || lineNumber < 1 || lineNumber > view.state.doc.lines) {
         return false;
       }
       const line = view.state.doc.line(lineNumber);
       const to = lineNumber < view.state.doc.lines ? view.state.doc.line(lineNumber + 1).from : line.to;
-      view.dispatch({
+      view.dispatch(preserveEditorContext({
         changes: { from: line.from, to },
-        scrollIntoView: true
-      });
+        scrollIntoView: !preserveSelection
+      }, preserveSelection));
       return true;
     },
     destroy() {
@@ -39526,6 +39635,41 @@ function createSourceEditor({
       globalThis.removeEventListener?.("resize", componentInteraction.refreshPositions);
       view.destroy();
     }
+  };
+}
+function dispatchEditorTransactions(transactions, view) {
+  if (!editorTransactionsPreserveContext(transactions)) {
+    view.update(transactions);
+    return;
+  }
+  let scrollSnapshot = view.scrollSnapshot();
+  for (const transaction of transactions) {
+    scrollSnapshot = scrollSnapshot?.map(transaction.changes);
+  }
+  const finalState = transactions.at(-1)?.state;
+  if (!scrollSnapshot || !finalState) {
+    view.update(transactions);
+    return;
+  }
+  view.update([
+    ...transactions,
+    finalState.update({ effects: scrollSnapshot })
+  ]);
+}
+function editorTransactionsPreserveContext(transactions = []) {
+  return transactions.some((transaction) => transaction.annotation(preserveEditorContextAnnotation) === true || transaction.isUserEvent("undo") || transaction.isUserEvent("redo"));
+}
+function preserveEditorContext(spec, preserve = true) {
+  if (!preserve) {
+    return spec;
+  }
+  const annotations = spec.annotations === void 0 ? [] : Array.isArray(spec.annotations) ? spec.annotations : [spec.annotations];
+  return {
+    ...spec,
+    annotations: [
+      ...annotations,
+      preserveEditorContextAnnotation.of(true)
+    ]
   };
 }
 function isVerticalTableColumnSelection(selection) {
@@ -39778,9 +39922,9 @@ function createLiveMdxComponentInteraction({
     if (nextSource === source) {
       return false;
     }
-    view.dispatch({
+    view.dispatch(preserveEditorContext({
       changes: { from: start.from, to: end.to, insert: nextSource }
-    });
+    }));
     scheduleRefresh();
     return true;
   };
@@ -40017,6 +40161,7 @@ function createLiveTableInteraction({
   let pointerSelection = null;
   let activeEditor = null;
   let columnDrag = null;
+  let columnResize = null;
   let refreshHandle = null;
   const scheduleRefresh = () => {
     if (refreshHandle !== null) {
@@ -40042,31 +40187,89 @@ function createLiveTableInteraction({
       return null;
     }
     const endLine = block2.endIndex + 1;
+    const metadataLine = Number.isInteger(block2.metadataIndex) ? view.state.doc.line(block2.metadataIndex + 1) : null;
     return {
       ...block2,
       startLine,
       endLine,
       from: view.state.doc.line(startLine).from,
-      to: view.state.doc.line(endLine).to
+      to: view.state.doc.line(endLine).to,
+      metadataFrom: metadataLine?.from ?? null,
+      metadataTo: metadataLine?.to ?? null
     };
   };
-  const dispatchTableSource = (block2, source) => {
+  const dispatchTableUpdate = (block2, {
+    source = block2?.source,
+    columnWidths
+  } = {}) => {
     const view = getView();
     const nextSource = String(source ?? "");
-    if (!view || !block2 || nextSource === block2.source) {
-      scheduleRefresh();
+    if (!view || !block2) {
       return false;
     }
-    view.dispatch({
-      changes: {
+    const hasColumnWidths = columnWidths !== void 0;
+    const widthsLine = hasColumnWidths ? serializeMarkdownTableColumnWidths(columnWidths) : null;
+    if (hasColumnWidths && !widthsLine) {
+      return false;
+    }
+    const changes = [];
+    let tableLineShift = 0;
+    if (widthsLine && Number.isInteger(block2.metadataFrom)) {
+      const currentLine = view.state.doc.sliceString(
+        block2.metadataFrom,
+        block2.metadataTo
+      );
+      if (currentLine !== widthsLine) {
+        changes.push({
+          from: block2.metadataFrom,
+          to: block2.metadataTo,
+          insert: widthsLine
+        });
+      }
+      if (nextSource !== block2.source) {
+        changes.push({
+          from: block2.from,
+          to: block2.to,
+          insert: nextSource
+        });
+      }
+    } else if (widthsLine) {
+      changes.push({
+        from: block2.from,
+        to: block2.to,
+        insert: `${widthsLine}
+${nextSource}`
+      });
+      tableLineShift = 1;
+    } else if (nextSource !== block2.source) {
+      changes.push({
         from: block2.from,
         to: block2.to,
         insert: nextSource
+      });
+    }
+    if (changes.length === 0) {
+      scheduleRefresh();
+      return false;
+    }
+    if (tableLineShift > 0) {
+      if (selection?.startLine === block2.startLine) {
+        selection = {
+          ...selection,
+          startLine: selection.startLine + tableLineShift
+        };
       }
-    });
+      if (activeEditor?.startLine === block2.startLine) {
+        activeEditor.startLine += tableLineShift;
+      }
+    }
+    view.dispatch(preserveEditorContext({
+      changes: changes.length === 1 ? changes[0] : changes
+    }));
     scheduleRefresh();
     return true;
   };
+  const dispatchTableSource = (block2, source) => dispatchTableUpdate(block2, { source });
   const normalizedSelection = (block2 = currentTableBlock(selection?.startLine)) => {
     if (!selection || !block2) {
       return null;
@@ -40262,6 +40465,9 @@ function createLiveTableInteraction({
     return true;
   };
   const clearSelection = ({ commit = true } = {}) => {
+    if (columnResize) {
+      finishColumnResize(false);
+    }
     if (commit) {
       commitEditor();
     } else {
@@ -40345,6 +40551,191 @@ function createLiveTableInteraction({
     }
     return nearest?.column ?? null;
   };
+  const tablePreviewElements = (startLine) => {
+    const container = getView()?.dom.querySelector(
+      `.cm-live-block-preview-table[data-live-block-start="${startLine}"]`
+    );
+    const table2 = container?.querySelector(".cm-live-table");
+    if (!container || !table2) {
+      return null;
+    }
+    return {
+      container,
+      table: table2,
+      card: table2.closest(".table-card"),
+      scroll: table2.closest(".table-scroll"),
+      columns: [...table2.querySelectorAll("colgroup col")]
+    };
+  };
+  const measuredTableColumnWidths = (elements, columnCount) => {
+    const headerCells = Array.from({ length: columnCount }, (_, column) => elements.container.querySelector(
+      `[data-live-table-cell="true"][data-live-table-row="0"][data-live-table-column="${column}"]`
+    ));
+    if (headerCells.some((cell) => !cell)) {
+      return null;
+    }
+    return normalizeMarkdownTableColumnWidths(
+      headerCells.map((cell) => Math.max(
+        MARKDOWN_TABLE_MIN_COLUMN_WIDTH,
+        Math.min(
+          MARKDOWN_TABLE_MAX_COLUMN_WIDTH,
+          Math.round(cell.getBoundingClientRect().width)
+        )
+      )),
+      columnCount
+    );
+  };
+  const inlineStyleValue = (element, property) => element?.style?.getPropertyValue?.(property) ?? element?.style?.[property] ?? "";
+  const setInlineStyleValue = (element, property, value) => {
+    if (!element?.style) {
+      return;
+    }
+    if (value) {
+      element.style.setProperty?.(property, value);
+      if (!element.style.setProperty) {
+        element.style[property] = value;
+      }
+      return;
+    }
+    element.style.removeProperty?.(property);
+    if (!element.style.removeProperty) {
+      delete element.style[property];
+    }
+  };
+  const captureTableLayout = (elements) => ({
+    table: {
+      width: inlineStyleValue(elements.table, "width"),
+      minWidth: inlineStyleValue(elements.table, "min-width"),
+      maxWidth: inlineStyleValue(elements.table, "max-width")
+    },
+    card: elements.card ? {
+      layout: elements.card.dataset.tableLayout,
+      preferredWidth: inlineStyleValue(elements.card, "--table-preferred-width"),
+      minWidth: inlineStyleValue(elements.card, "--table-min-width")
+    } : null,
+    scroll: elements.scroll ? {
+      layout: elements.scroll.dataset.tableLayout,
+      preferredWidth: inlineStyleValue(elements.scroll, "--table-preferred-width"),
+      minWidth: inlineStyleValue(elements.scroll, "--table-min-width")
+    } : null,
+    columns: elements.columns.map((column) => inlineStyleValue(column, "width"))
+  });
+  const restoreTableLayout = (elements, snapshot) => {
+    if (!elements || !snapshot) {
+      return;
+    }
+    setInlineStyleValue(elements.table, "width", snapshot.table.width);
+    setInlineStyleValue(elements.table, "min-width", snapshot.table.minWidth);
+    setInlineStyleValue(elements.table, "max-width", snapshot.table.maxWidth);
+    for (const [index, column] of elements.columns.entries()) {
+      setInlineStyleValue(column, "width", snapshot.columns[index] ?? "");
+    }
+    for (const [element, state] of [
+      [elements.card, snapshot.card],
+      [elements.scroll, snapshot.scroll]
+    ]) {
+      if (!element || !state) {
+        continue;
+      }
+      if (state.layout === void 0) {
+        delete element.dataset.tableLayout;
+      } else {
+        element.dataset.tableLayout = state.layout;
+      }
+      setInlineStyleValue(element, "--table-preferred-width", state.preferredWidth);
+      setInlineStyleValue(element, "--table-min-width", state.minWidth);
+    }
+  };
+  const applyTableColumnWidths = (startLine, widths) => {
+    const elements = tablePreviewElements(startLine);
+    const normalized = normalizeMarkdownTableColumnWidths(
+      widths,
+      elements?.columns.length
+    );
+    if (!elements || !normalized) {
+      return false;
+    }
+    const totalWidth = normalized.reduce((sum, width) => sum + width, 0);
+    for (const [index, column] of elements.columns.entries()) {
+      setInlineStyleValue(column, "width", `${normalized[index]}px`);
+    }
+    setInlineStyleValue(elements.table, "width", `${totalWidth}px`);
+    setInlineStyleValue(elements.table, "min-width", `${totalWidth}px`);
+    setInlineStyleValue(elements.table, "max-width", "none");
+    for (const element of [elements.card, elements.scroll]) {
+      if (!element) {
+        continue;
+      }
+      element.dataset.tableLayout = "manual";
+      setInlineStyleValue(element, "--table-preferred-width", `${totalWidth}px`);
+      setInlineStyleValue(element, "--table-min-width", `${totalWidth}px`);
+    }
+    return true;
+  };
+  const beginColumnResize = (event, handle) => {
+    if (!isEditable() || getMode() !== "live") {
+      return false;
+    }
+    commitEditor();
+    const container = handle.closest(".cm-live-block-preview-table");
+    const startLine = Number(container?.dataset.liveBlockStart);
+    const column = Number(handle.dataset.liveTableResizeColumn);
+    const block2 = currentTableBlock(startLine);
+    const elements = tablePreviewElements(startLine);
+    if (!block2 || !elements || !Number.isInteger(column) || column < 0 || column >= block2.table.columnCount || elements.columns.length !== block2.table.columnCount) {
+      return false;
+    }
+    const widths = block2.columnWidths ?? measuredTableColumnWidths(
+      elements,
+      block2.table.columnCount
+    );
+    if (!widths) {
+      return false;
+    }
+    columnResize = {
+      pointerId: event.pointerId,
+      startLine,
+      column,
+      startX: event.clientX,
+      startWidth: widths[column],
+      widths: [...widths],
+      elements,
+      snapshot: captureTableLayout(elements),
+      handle
+    };
+    elements.container.classList.add("is-resizing-columns");
+    handle.classList.add("is-dragging");
+    applyTableColumnWidths(startLine, widths);
+    onSelect({ startLine, column });
+    try {
+      handle.setPointerCapture?.(event.pointerId);
+    } catch {
+    }
+    refreshNow();
+    return true;
+  };
+  const finishColumnResize = (apply) => {
+    if (!columnResize) {
+      return false;
+    }
+    const resize = columnResize;
+    columnResize = null;
+    resize.handle?.classList.remove("is-dragging");
+    resize.elements?.container.classList.remove("is-resizing-columns");
+    if (!apply) {
+      restoreTableLayout(resize.elements, resize.snapshot);
+      scheduleRefresh();
+      return true;
+    }
+    const block2 = currentTableBlock(resize.startLine);
+    if (!block2) {
+      restoreTableLayout(resize.elements, resize.snapshot);
+      scheduleRefresh();
+      return false;
+    }
+    dispatchTableUpdate(block2, { columnWidths: resize.widths });
+    return true;
+  };
   const beginColumnDrag = (event, handle) => {
     const block2 = currentTableBlock(selection?.startLine);
     const normalized = normalizedSelection(block2);
@@ -40395,7 +40786,15 @@ function createLiveTableInteraction({
       focusColumn: drag.targetColumn
     };
     if (result.changed) {
-      dispatchTableSource(block2, result.source);
+      const reorderedWidths = block2.columnWidths ? reorderMarkdownTableColumnWidths(
+        block2.columnWidths,
+        drag.fromColumn,
+        drag.targetColumn
+      ) : void 0;
+      dispatchTableUpdate(block2, {
+        source: result.source,
+        columnWidths: reorderedWidths
+      });
     } else {
       scheduleRefresh();
     }
@@ -40493,6 +40892,18 @@ function createLiveTableInteraction({
       applyAlignment(alignmentButton.dataset.liveTableAlignAction);
       return;
     }
+    const resizeHandle = closestElement(
+      event.target,
+      "[data-live-table-resize-handle]"
+    );
+    if (resizeHandle) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.button === 0) {
+        beginColumnResize(event, resizeHandle);
+      }
+      return;
+    }
     const columnHandle = closestElement(
       event.target,
       "[data-live-table-column-handle]"
@@ -40542,6 +40953,25 @@ function createLiveTableInteraction({
     refreshNow();
   };
   const handlePointerMove = (event) => {
+    if (columnResize?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      const width = Math.max(
+        MARKDOWN_TABLE_MIN_COLUMN_WIDTH,
+        Math.min(
+          MARKDOWN_TABLE_MAX_COLUMN_WIDTH,
+          Math.round(
+            columnResize.startWidth + event.clientX - columnResize.startX
+          )
+        )
+      );
+      if (width !== columnResize.widths[columnResize.column]) {
+        columnResize.widths[columnResize.column] = width;
+        applyTableColumnWidths(columnResize.startLine, columnResize.widths);
+        refreshNow();
+      }
+      return;
+    }
     if (columnDrag?.pointerId === event.pointerId) {
       event.preventDefault();
       event.stopPropagation();
@@ -40592,6 +41022,12 @@ function createLiveTableInteraction({
     }
   };
   const handlePointerUp = (event) => {
+    if (columnResize?.pointerId === event.pointerId) {
+      event.preventDefault();
+      event.stopPropagation();
+      finishColumnResize(true);
+      return;
+    }
     if (columnDrag?.pointerId === event.pointerId) {
       event.preventDefault();
       event.stopPropagation();
@@ -40619,6 +41055,10 @@ function createLiveTableInteraction({
     }
   };
   const handlePointerCancel = (event) => {
+    if (columnResize?.pointerId === event.pointerId) {
+      finishColumnResize(false);
+      return;
+    }
     if (columnDrag?.pointerId === event.pointerId) {
       finishColumnDrag(false);
       return;
@@ -40649,6 +41089,46 @@ function createLiveTableInteraction({
     clearSelection({ commit: false });
     return true;
   };
+  const refreshColumnResizeHandles = (container) => {
+    const handles = [
+      ...container.querySelectorAll("[data-live-table-resize-handle]")
+    ];
+    const table2 = container.querySelector(".cm-live-table");
+    const tableRect = table2?.getBoundingClientRect();
+    const scrollRect = container.querySelector(".table-scroll")?.getBoundingClientRect();
+    const enabled = Boolean(
+      table2 && tableRect && isEditable() && getMode() === "live"
+    );
+    for (const handle of handles) {
+      const column = Number(handle.dataset.liveTableResizeColumn);
+      const headerCell = container.querySelector(
+        `[data-live-table-cell="true"][data-live-table-row="0"][data-live-table-column="${column}"]`
+      );
+      if (!enabled || !headerCell) {
+        handle.hidden = true;
+        continue;
+      }
+      const cellRect = headerCell.getBoundingClientRect();
+      const visibleLeft = Math.max(tableRect.left, scrollRect?.left ?? tableRect.left);
+      const visibleRight = Math.min(tableRect.right, scrollRect?.right ?? tableRect.right);
+      if (cellRect.right < visibleLeft - 4 || cellRect.right > visibleRight + 4) {
+        handle.hidden = true;
+        continue;
+      }
+      const handleX = Math.max(
+        visibleLeft,
+        Math.min(visibleRight, cellRect.right)
+      );
+      handle.hidden = false;
+      handle.classList.toggle(
+        "is-dragging",
+        columnResize?.startLine === Number(container.dataset.liveBlockStart) && columnResize.column === column
+      );
+      handle.style.left = `${Math.round(handleX)}px`;
+      handle.style.top = `${Math.round(tableRect.top)}px`;
+      handle.style.height = `${Math.max(1, Math.round(tableRect.height))}px`;
+    }
+  };
   const refreshNow = () => {
     const view = getView();
     if (!view) {
@@ -40658,6 +41138,7 @@ function createLiveTableInteraction({
       ...view.dom.querySelectorAll(".cm-live-block-preview-table")
     ];
     for (const container2 of containers) {
+      refreshColumnResizeHandles(container2);
       const cells = [
         ...container2.querySelectorAll('[data-live-table-cell="true"]')
       ];
@@ -40757,6 +41238,11 @@ function createLiveTableInteraction({
     selection = null;
     pointerSelection = null;
     columnDrag = null;
+    if (columnResize) {
+      restoreTableLayout(columnResize.elements, columnResize.snapshot);
+      columnResize.elements?.container.classList.remove("is-resizing-columns");
+      columnResize = null;
+    }
   };
   return {
     mount,
@@ -40869,7 +41355,27 @@ function prepareLiveTablePreview(container, block2, translate) {
   columnHandle.title = translate("column.drag");
   columnHandle.textContent = "\u283F";
   columnHandle.hidden = true;
-  container.append(toolbar, columnHandle);
+  const resizeHandles = Array.from(
+    { length: parsed.columnCount },
+    (_, column) => {
+      const resizeHandle = document.createElement("button");
+      resizeHandle.type = "button";
+      resizeHandle.className = "cm-live-table-resize-handle";
+      resizeHandle.dataset.liveTableResizeHandle = "true";
+      resizeHandle.dataset.liveTableResizeColumn = String(column);
+      resizeHandle.setAttribute(
+        "aria-label",
+        translate("column.resize", { column: column + 1 })
+      );
+      resizeHandle.title = translate("column.resize", { column: column + 1 });
+      resizeHandle.hidden = true;
+      if (column === parsed.columnCount - 1) {
+        resizeHandle.classList.add("is-table-edge");
+      }
+      return resizeHandle;
+    }
+  );
+  container.append(toolbar, columnHandle, ...resizeHandles);
   return true;
 }
 function createLiveTableToolbarButton(label, text2 = "", modifier = "") {
@@ -41996,12 +42502,15 @@ function livePreviewBlocksForSource(source, { activeLineNumber = null } = {}) {
     }
     const tableBlock = liveMarkdownTableBlockAt(lines, index);
     if (tableBlock) {
-      const startLine = lineNumber;
+      const tableStartLine = lineNumber;
+      const startLine = Number.isInteger(tableBlock.metadataIndex) ? tableBlock.metadataIndex + 1 : tableStartLine;
       const endLine = tableBlock.endIndex + 1;
       blocks.push({
         type: "table",
         startLine,
+        tableStartLine,
         endLine,
+        columnWidths: tableBlock.columnWidths,
         source: lines.slice(index, tableBlock.endIndex + 1).join("\n")
       });
       index = tableBlock.endIndex;
@@ -42170,7 +42679,7 @@ var LiveBlockPreviewWidget = class extends WidgetType {
     this.componentInteraction = componentInteraction;
   }
   eq(other) {
-    return other.block?.type === this.block.type && other.block?.component === this.block.component && other.block?.startLine === this.block.startLine && other.block?.endLine === this.block.endLine && other.block?.source === this.block.source && JSON.stringify(other.renderOptions ?? {}) === JSON.stringify(this.renderOptions ?? {});
+    return other.block?.type === this.block.type && other.block?.component === this.block.component && other.block?.startLine === this.block.startLine && other.block?.tableStartLine === this.block.tableStartLine && other.block?.endLine === this.block.endLine && other.block?.source === this.block.source && JSON.stringify(other.block?.columnWidths ?? null) === JSON.stringify(this.block.columnWidths ?? null) && JSON.stringify(other.renderOptions ?? {}) === JSON.stringify(this.renderOptions ?? {});
   }
   toDOM() {
     const container = document.createElement("div");
@@ -42180,11 +42689,16 @@ var LiveBlockPreviewWidget = class extends WidgetType {
       this.block.component ? `cm-live-block-preview-${this.block.component.toLowerCase()}` : ""
     ].filter(Boolean);
     container.className = classNames.join(" ");
-    container.dataset.liveBlockStart = String(this.block.startLine);
+    container.dataset.liveBlockStart = String(
+      this.block.tableStartLine ?? this.block.startLine
+    );
     container.dataset.liveBlockEnd = String(this.block.endLine);
     const card = document.createElement("div");
     card.className = "cm-live-block-preview-card";
-    card.innerHTML = livePreviewHtmlForBlock(this.block.source, this.renderOptions);
+    card.innerHTML = livePreviewHtmlForBlock(this.block.source, {
+      ...this.renderOptions,
+      tableColumnWidths: this.block.columnWidths
+    });
     enhanceImageLoadStates(card);
     container.append(card);
     this.tableInteraction?.mount?.(container, this.block);
@@ -42250,6 +42764,8 @@ export {
   createLiveMdxComponentInteraction,
   createLiveTableInteraction,
   createSourceEditor,
+  dispatchEditorTransactions,
+  editorTransactionsPreserveContext,
   imageLineAttributes,
   imageLineForAction,
   isLiveBlankClick,
@@ -42278,6 +42794,7 @@ export {
   normalizeImageWidth2 as normalizeImageWidth,
   pastedImageInsertionText,
   pastedTextLinkCandidate,
+  preserveEditorContext,
   slashCommandCompletionSource,
   slashCommandTemplate,
   slashCommandsForLocale,
