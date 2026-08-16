@@ -99,6 +99,31 @@ test("runGithubIssuesCli rejects repositories outside the configured scope", asy
   }
 });
 
+test("runGithubIssuesCli emits interoperable JSON for text with lone UTF-16 surrogates", async () => {
+  const fixture = await databaseFixture();
+  try {
+    await seedRepository(fixture.databasePath, "example/docs", 33, {
+      title: "Broken \uD83C title and valid \u{1F34B} emoji",
+    });
+    const lines = [];
+    await runGithubIssuesCli(
+      ["search", "", "--repo", "example/docs", "--account", "alice", "--json"],
+      {
+        openStore: () => openGithubIssuesStore({ databasePath: fixture.databasePath }),
+        loadRepositoryConfig: configuredTestRepositories,
+        stdout: (line) => lines.push(line),
+        now: () => new Date("2026-08-16T03:00:00Z"),
+      },
+    );
+
+    assert.doesNotMatch(lines[0], /\\ud83c/iu);
+    const payload = JSON.parse(lines[0]);
+    assert.equal(payload.issues[0].title, "Broken \uFFFD title and valid \u{1F34B} emoji");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("runGithubIssuesCli isolates one repository failure during sync --all", async () => {
   const store = await openGithubIssuesStore({ databasePath: ":memory:" });
   const lines = [];

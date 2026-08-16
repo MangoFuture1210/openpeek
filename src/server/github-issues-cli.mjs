@@ -569,7 +569,13 @@ function freshnessSummary(statuses) {
 }
 
 function writeResult({ json, stdout, payload, human }) {
-  stdout(json ? JSON.stringify(payload) : human);
+  stdout(json ? stringifyCliJson(payload) : human);
+}
+
+export function stringifyCliJson(payload) {
+  return JSON.stringify(payload, (_key, value) => (
+    typeof value === "string" ? value.toWellFormed() : value
+  ));
 }
 
 function inlineOption(argument) {
