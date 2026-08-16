@@ -39,7 +39,7 @@ export function defaultGithubIssuesDatabasePath({
   return path.join(cacheRoot, "openglance", "github-issues.sqlite");
 }
 
-export async function openGithubIssuesStore({ databasePath } = {}) {
+export async function openGithubIssuesStore({ databasePath, readOnly = false } = {}) {
   const requestedPath = databasePath === ":memory:"
     ? ":memory:"
     : databasePath
@@ -50,14 +50,14 @@ export async function openGithubIssuesStore({ databasePath } = {}) {
     : await assertGithubIssuesPrivatePathOutsideWorktree(requestedPath);
   const { DatabaseSync } = await loadSqliteModule();
 
-  if (resolvedPath !== ":memory:") {
+  if (resolvedPath !== ":memory:" && !readOnly) {
     await mkdir(path.dirname(resolvedPath), { recursive: true, mode: 0o700 });
   }
 
-  const database = new DatabaseSync(resolvedPath);
+  const database = new DatabaseSync(resolvedPath, { readOnly });
   try {
-    initializeDatabase(database);
-    if (resolvedPath !== ":memory:") {
+    initializeDatabase(database, { readOnly });
+    if (resolvedPath !== ":memory:" && !readOnly) {
       await chmod(resolvedPath, 0o600).catch((error) => {
         if (process.platform !== "win32") {
           throw error;
@@ -860,10 +860,8 @@ export class GithubIssuesStore {
     const useFts = terms.length > 0 && terms.every((term) => [...term].length >= 3);
     let rows;
     if (useFts) {
-      parameters.$match = terms
-        .map((term) => `"${term.replaceAll('"', '""')}"`)
-        .join(" AND ");
-      rows = this.database.prepare(`
+      const quotedTerms = terms.map((term) => `"${term.replaceAll('"', '""')}"`);
+      const searchStatement = this.database.prepare(`
         WITH matches AS (
           SELECT
             host,
@@ -917,11 +915,18 @@ export class GithubIssuesStore {
           i.repository ASC,
           i.number DESC
         LIMIT $limit
-      `).all(parameters);
+      `);
+      parameters.$match = quotedTerms.join(" AND ");
+      rows = searchStatement.all(parameters);
+      if (rows.length === 0 && quotedTerms.length > 1) {
+        parameters.$match = quotedTerms.join(" OR ");
+        rows = searchStatement.all(parameters);
+      }
     } else {
+      const strictClauses = [...clauses];
       for (const [index, term] of terms.entries()) {
         const parameter = `$term${index}`;
-        clauses.push(`(
+        strictClauses.push(`(
           i.search_text LIKE ${parameter} ESCAPE '\\'
           OR EXISTS (
             SELECT 1
@@ -951,7 +956,7 @@ export class GithubIssuesStore {
               AND indexed_comment.issue_number = i.number
           ) AS indexed_comments_count
         FROM issues AS i
-        WHERE ${clauses.join("\n          AND ")}
+        WHERE ${strictClauses.join("\n          AND ")}
         ORDER BY
           CASE i.state WHEN 'open' THEN 0 ELSE 1 END,
           i.updated_at DESC,
@@ -959,6 +964,10 @@ export class GithubIssuesStore {
           i.number DESC
         LIMIT $limit
       `).all(parameters);
+    }
+
+    if (rows.length === 0 && terms.length > 0) {
+      rows = fuzzySearchRows(this.database, { clauses, parameters, terms });
     }
 
     return rows.map(issueSummaryRow);
@@ -1021,10 +1030,12 @@ async function loadSqliteModule() {
   return sqliteModulePromise;
 }
 
-function initializeDatabase(database) {
+function initializeDatabase(database, { readOnly = false } = {}) {
   database.exec("PRAGMA foreign_keys = ON;");
   database.exec("PRAGMA busy_timeout = 5000;");
-  database.exec("PRAGMA journal_mode = WAL;");
+  if (!readOnly) {
+    database.exec("PRAGMA journal_mode = WAL;");
+  }
   const versionRow = database.prepare("PRAGMA user_version").get();
   const version = Number(versionRow?.user_version ?? 0);
   if (version > GITHUB_ISSUES_INDEX_SCHEMA_VERSION) {
@@ -1034,6 +1045,11 @@ function initializeDatabase(database) {
   }
   if (version === GITHUB_ISSUES_INDEX_SCHEMA_VERSION) {
     return;
+  }
+  if (readOnly) {
+    throw new Error(
+      `GitHub Issues index schema ${version} requires a writable sync before it can be queried.`,
+    );
   }
   if (version === 1) {
     migrateGithubIssuesSchemaV1ToV2(database);
@@ -1468,6 +1484,87 @@ function parseSearchTerms(query) {
     return { number: normalizeIssueNumber(rawTerms[0]), terms: [] };
   }
   return { number, terms };
+}
+
+function fuzzySearchRows(database, { clauses, parameters, terms }) {
+  const fragments = fuzzySearchFragments(terms);
+  if (fragments.length === 0) {
+    return [];
+  }
+  const fuzzyParameters = Object.fromEntries(
+    Object.entries(parameters).filter(([parameter]) => !/^\$(?:match|term\d+)$/u.test(parameter)),
+  );
+  const matches = fragments.map((fragment, index) => {
+    const parameter = `$fuzzy${index}`;
+    fuzzyParameters[parameter] = `%${escapeLike(fragment)}%`;
+    return `(
+      i.search_text LIKE ${parameter} ESCAPE '\\'
+      OR EXISTS (
+        SELECT 1
+        FROM comments AS matching_comment
+        WHERE matching_comment.host = i.host
+          AND matching_comment.account_login = i.account_login
+          AND matching_comment.repository = i.repository
+          AND matching_comment.issue_number = i.number
+          AND (
+            matching_comment.body LIKE ${parameter} ESCAPE '\\'
+            OR matching_comment.author LIKE ${parameter} ESCAPE '\\'
+          )
+      )
+    )`;
+  });
+  const matchScore = matches.map((match) => `CASE WHEN ${match} THEN 1 ELSE 0 END`).join(" + ");
+  return database.prepare(`
+    SELECT
+      i.*,
+      (${matchScore}) AS search_rank,
+      (
+        SELECT COUNT(*)
+        FROM comments AS indexed_comment
+        WHERE indexed_comment.host = i.host
+          AND indexed_comment.account_login = i.account_login
+          AND indexed_comment.repository = i.repository
+          AND indexed_comment.issue_number = i.number
+      ) AS indexed_comments_count
+    FROM issues AS i
+    WHERE ${clauses.join("\n      AND ")}
+      AND (${matches.join(" OR ")})
+    ORDER BY
+      search_rank DESC,
+      CASE i.state WHEN 'open' THEN 0 ELSE 1 END,
+      i.updated_at DESC,
+      i.repository ASC,
+      i.number DESC
+    LIMIT $limit
+  `).all(fuzzyParameters);
+}
+
+function fuzzySearchFragments(terms, maximum = 24) {
+  const fragments = [];
+  const add = (fragment) => {
+    if (fragment && !fragments.includes(fragment) && fragments.length < maximum) {
+      fragments.push(fragment);
+    }
+  };
+  for (const term of terms) {
+    for (const hanRun of String(term).match(/\p{Script=Han}+/gu) ?? []) {
+      const characters = [...hanRun];
+      if (characters.length <= 2) {
+        add(hanRun);
+        continue;
+      }
+      for (let index = 0; index < characters.length - 1; index += 1) {
+        add(`${characters[index]}${characters[index + 1]}`);
+      }
+    }
+    const nonHan = String(term).replace(/\p{Script=Han}+/gu, " ");
+    for (const token of nonHan.match(/[\p{L}\p{N}]+/gu) ?? []) {
+      if ([...token].length >= 2 || /^\d+$/u.test(token)) {
+        add(token);
+      }
+    }
+  }
+  return fragments;
 }
 
 function bodyExcerpt(value, maxLength = 240) {

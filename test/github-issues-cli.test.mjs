@@ -38,6 +38,7 @@ test("parseGithubIssuesArgs supports a configured multi-repository sync", () => 
 
 test("runGithubIssuesCli searches only configured local snapshots and reports partial coverage", async () => {
   const fixture = await databaseFixture();
+  let openOptions;
   try {
     await seedRepository(fixture.databasePath, "example/docs", 31, {
       title: "Agent 本地索引",
@@ -50,7 +51,10 @@ test("runGithubIssuesCli searches only configured local snapshots and reports pa
     await runGithubIssuesCli(
       ["search", "网络查询", "--all", "--account", "alice", "--json"],
       {
-        openStore: () => openGithubIssuesStore({ databasePath: fixture.databasePath }),
+        openStore: (options) => {
+          openOptions = options;
+          return openGithubIssuesStore({ databasePath: fixture.databasePath, ...options });
+        },
         loadRepositoryConfig: configuredTestRepositories,
         commandRunner: async () => {
           throw new Error("Offline search must not invoke git or gh.");
@@ -69,6 +73,7 @@ test("runGithubIssuesCli searches only configured local snapshots and reports pa
     assert.equal(payload.scope.snapshotRepositoryCount, 2);
     assert.deepEqual(payload.issues.map((issue) => issue.number), [31]);
     assert.equal(payload.issues[0].indexedCommentsCount, 1);
+    assert.deepEqual(openOptions, { readOnly: true });
   } finally {
     await fixture.close();
   }
