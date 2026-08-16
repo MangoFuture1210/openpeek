@@ -209,7 +209,7 @@ GitHub Issues support has four layers with one-way dependencies:
 
 Repository scope comes only from a protected local configuration file or the explicit environment allowlist. Public source and renderer code contain no private repository defaults. A renderer can display aggregate status, request a sync, or replace the local scope with at most 50 syntactically bounded `owner/name` values through restricted IPC. It cannot select a database/configuration path, invoke a GitHub command, access a token, submit an arbitrary query to the privileged process, or modify an environment-managed scope.
 
-The database is per user/device and outside every Git repository. Rows are keyed by GitHub host, active login, and repository. Issue and comment FTS use the SQLite trigram tokenizer; terms shorter than three characters use an escaped relational fallback. Search results carry coverage and freshness because a missing or stale cache row cannot assert remote absence.
+The database is per user/device and outside every Git repository. Rows are keyed by GitHub host, active login, and repository. Issue and comment FTS use the SQLite trigram tokenizer; terms shorter than three characters use an escaped relational fallback. Exact terms run first. A zero-result query then uses a bounded mixed-language fallback that ranks Chinese bigram and Latin/numeric token matches, allowing Agent-generated phrases to recover from reordered Chinese compounds without weakening exact-result ordering. Search results carry coverage and freshness because a missing or stale cache row cannot assert remote absence.
 
 Synchronization is the only network path. The first sync and an explicit full sync fetch all Issue and repository-comment pages; later syncs send a five-minute-overlapped `since` cursor to both endpoints. GitHub's shared Issue endpoints also return pull-request records, which are counted as fetched API pages and discarded before the transaction commits. Full sync reconciles deletions; incremental sync cannot infer deletions without tombstones.
 
@@ -217,7 +217,7 @@ Before every repository, the synchronizer reads GitHub's live REST core budget a
 
 A 30-minute host/account coordinator lease, renewed before every repository, ensures only one App or Agent process owns a multi-repository sync on one device; a 15-minute repository lease remains as defense in depth. Readers continue using WAL throughout. Both custom configuration and database paths are rejected when their canonical location is inside any Git worktree, preventing private Issue data from entering Git by path override.
 
-`gh` is required only for authentication and synchronization. The token remains inside GitHub CLI credential handling. Offline search, show, status, Settings rendering, and database startup never request or persist the token. Issue creation, edits, comments, assignment, Project mutation, and every other GitHub write remain outside this module.
+`gh` is required only for authentication and synchronization. The token remains inside GitHub CLI credential handling. Offline search, show, and status open the current schema read-only: they do not create the cache, select WAL mode, migrate, chmod, request a token, or persist one. Writable synchronization owns initialization and migration. Issue creation, edits, comments, assignment, Project mutation, and every other GitHub write remain outside this module.
 
 ## Workbench state and navigation
 

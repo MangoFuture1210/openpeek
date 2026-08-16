@@ -63,7 +63,9 @@ export async function runGithubIssuesCli(
     );
   }
 
-  const store = await openStore();
+  const store = await openStore({
+    readOnly: ["search", "show", "status"].includes(parsed.command),
+  });
   try {
     if (parsed.command === "sync") {
       const repositories = parsed.all

@@ -45,6 +45,48 @@ test("openGithubIssuesStore refuses to create private cache data inside a Git wo
   }
 });
 
+test("openGithubIssuesStore can query a current on-disk snapshot without write access", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "openglance-issues-readonly-"));
+  const databasePath = path.join(root, "issues.sqlite");
+  const writableStore = await openGithubIssuesStore({ databasePath });
+  try {
+    writableStore.syncRepository({
+      account: "alice",
+      repository: "example/docs",
+      syncedAt: "2026-08-16T01:00:00Z",
+      syncCursor: "2026-08-16T01:00:00Z",
+      full: true,
+      apiPages: 1,
+      issues: [issue({ number: 7, title: "Read-only Agent lookup" })],
+      comments: [],
+    });
+  } finally {
+    writableStore.close();
+  }
+
+  const readOnlyStore = await openGithubIssuesStore({ databasePath, readOnly: true });
+  try {
+    assert.deepEqual(
+      readOnlyStore.search({
+        account: "alice",
+        repository: "example/docs",
+        query: "Agent lookup",
+      }).map((candidate) => candidate.number),
+      [7],
+    );
+    assert.throws(
+      () => readOnlyStore.ensureRepository({
+        account: "alice",
+        repository: "example/other",
+      }),
+      /readonly database/iu,
+    );
+  } finally {
+    readOnlyStore.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("GithubIssuesStore searches Chinese and English metadata without a network dependency", async () => {
   const fixture = await storeFixture();
   try {
@@ -69,6 +111,21 @@ test("GithubIssuesStore searches Chinese and English metadata without a network 
           body: "A local miss is not authoritative.",
           state: "closed",
           updatedAt: "2026-08-15T08:00:00Z",
+        }),
+        issue({
+          number: 13,
+          title: "登录短信持续触发腾讯云限流",
+          body: "手机号登录时，点发送验证码后提示发送失败。",
+        }),
+        issue({
+          number: 14,
+          title: "Android 9 WebView 离线加载 JS MIME 错误",
+          body: "旧设备返回 text/plain，H5 页面因此白屏。",
+        }),
+        issue({
+          number: 15,
+          title: "器乐练习 Hub 上线边界",
+          body: "审核账号下的练习入口展示仍待确认。",
         }),
       ],
       comments: [
@@ -117,6 +174,30 @@ test("GithubIssuesStore searches Chinese and English metadata without a network 
         state: "all",
       }).map((candidate) => candidate.number),
       [12],
+    );
+    assert.deepEqual(
+      fixture.store.search({
+        account: "alice",
+        repository: "exampleorg/docs",
+        query: "手机号验证码发送失败 腾讯云限流",
+      }).map((candidate) => candidate.number),
+      [13],
+    );
+    assert.equal(
+      fixture.store.search({
+        account: "alice",
+        repository: "exampleorg/docs",
+        query: "Android 9 设备离线启动 H5 白屏",
+      })[0]?.number,
+      14,
+    );
+    assert.equal(
+      fixture.store.search({
+        account: "alice",
+        repository: "exampleorg/docs",
+        query: "乐器练习入口",
+      })[0]?.number,
+      15,
     );
     assert.deepEqual(
       fixture.store.search({
