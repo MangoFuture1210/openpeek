@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-15
+last_updated: 2026-08-16
 ---
 
 # OpenGlance
@@ -50,6 +50,9 @@ Markdown 知识库。
   本地知识库中打开对应文档。OpenGlance 只会在确认已发布版本后生成可供同事使用的版本化分享链接。
 - **Agent 可读的数据，人可读的图表。** 标准 Mermaid 围栏和受控 MDX 把流程图、图表、表格和指标保留
   为仓库中的可读文本，让 Agent 直接修改，让人通过 OpenGlance 查看可视化结果。
+- **可选的 Agent 本地 GitHub Issues 查询。** 通过显式、受 API 预算保护的同步，把配置范围内的 Issue
+  正文、评论、元数据、覆盖率和新鲜度保存在 Git 之外；后续搜索和详情读取只查本机 SQLite，GitHub 始终
+  是权威事实源。
 
 [**下载 macOS 版**](https://gitleaf.mangofuture.com/download?lang=zh-CN#macos) ·
 [Windows Preview](https://gitleaf.mangofuture.com/download?lang=zh-CN#windows) ·
@@ -71,7 +74,31 @@ Git 仓库是持久的共享上下文事实源：其中可以保存知识、指�
 
 - **AI Agent、开发者和自动化直接使用 Git。** 它们继续使用原来的路径、文件、分支、revision 和指令。
 - **人使用 OpenGlance。** 通过熟悉的目录树、搜索、Preview 和范围明确的编辑参与，不必把内容搬到另一个系统。
-- **Git 始终是共同事实源。** OpenGlance 不会把仓库导入、索引或复制到另一个知识服务。
+- **Git 始终是共享上下文事实源。** OpenGlance 不会把仓库文件导入、索引或复制到另一个知识服务；可选的
+  GitHub Issues 缓存只是可丢弃的 GitHub 任务只读模型，不是第二套任务系统。
+
+## 面向 Agent 的本地 GitHub Issues
+
+全局 CLI 和桌面版 Settings 可以为一份明确的仓库 allowlist 维护只读本地索引。公开源码不包含任何
+私有仓库默认值；先在本机配置完整范围，再显式同步，Agent 就能用结构化离线命令查询，而不需要启动
+OpenGlance 文档服务：
+
+```bash
+openglance issues configure example/docs example/app
+openglance issues sync --all --json
+openglance issues search "网络重试" --all --json
+openglance issues show example/docs#123 --json
+openglance issues status --all --json
+```
+
+只有 `sync` 会通过已经登录的 `gh` CLI 访问 GitHub。首次或完整同步会索引 Issue 正文、评论和常用元数据；
+后续同步使用带重叠窗口的增量游标。OpenGlance 在每个仓库同步前读取 GitHub 当时返回的 REST 预算，按实际
+上限保留 20% 余量，报告真实 Issue／评论分页请求数，并阻止账号级重复写入。一个账号在同一台机器上只有
+一个同步写入者；预计成本将进入保留预算时会停止整批同步。瞬时失败保留
+旧快照，确认仓库权限已撤销时则清除对应私有快照。本地未命中绝不表示 GitHub 中不存在对应 Issue。
+
+缓存位置、隐私边界、JSON 合同、增量语义、rate limit 行为和桌面状态入口见
+[GitHub Issues 本地索引指南](docs/github-issues-local-index.md)。
 
 ## 人参与的工作闭环
 
@@ -167,7 +194,7 @@ Mango Future 官方 macOS 安装包使用 Developer ID 签名和公证。Windows
 
 ### 从源码运行
 
-从源码运行需要 Node.js 22 或更高版本，并且本机已安装 Git：
+从源码运行需要 Node.js 22.13 或更高版本，并且本机已安装 Git：
 
 ```bash
 npm ci

@@ -103,6 +103,30 @@
       noEnvironmentStatus: "No environment check information is available.",
       repositoryStatus: "Current repository",
       noRepositoryStatus: "No repository is currently open.",
+      githubIssuesStatus: "GitHub Issues local index",
+      noGithubIssuesStatus: "No GitHub Issues repositories are configured.",
+      githubIssuesScopeTitle: "GitHub Issues repository scope",
+      githubIssuesScopeDescription: "Only these repositories are synchronized into the private local index. Enter one owner/name per line.",
+      githubIssuesRepositoriesLabel: "Repositories",
+      githubIssuesRepositoriesPlaceholder: "owner/repository",
+      saveGithubIssuesRepositories: "Save repository scope",
+      savingGithubIssuesRepositories: "Saving repository scope…",
+      githubIssuesRepositoriesSaved: "Repository scope saved.",
+      githubIssuesRepositoriesRequired: "Enter at least one repository as owner/name.",
+      githubIssuesRepositoriesEnvironment: "This scope is managed by OPENGLANCE_GITHUB_ISSUES_REPOSITORIES and is read-only in the App.",
+      githubIssuesRepositoriesInvalid: "The local repository scope is invalid. Repair it with the OpenGlance CLI before editing it in the App.",
+      githubIssuesRepositoriesSaveFailedShort: "Repository scope was not saved",
+      githubIssuesRepositoriesSaveFailed: "Unable to save the GitHub Issues repository scope.",
+      githubIssuesActionsAria: "GitHub Issues actions",
+      syncGithubIssues: "Sync GitHub Issues",
+      syncingGithubIssues: "Syncing GitHub Issues…",
+      githubIssuesSyncComplete: "Synced {completed}/{requested} repositories using {requests} API pages.",
+      githubIssuesSyncInProgress: "Another process is already syncing {count} repositories; existing snapshots remain available.",
+      githubIssuesSyncBudgetPaused: "Sync paused before using the reserved GitHub API budget: {completed}/{requested} complete, {deferred} deferred.",
+      githubIssuesSyncRateLimited: "GitHub rate limiting stopped sync: {completed}/{requested} complete, {deferred} deferred.",
+      githubIssuesSyncPartial: "Sync finished with {failed} repository failures.",
+      githubIssuesSyncFailedShort: "Issue sync failed",
+      githubIssuesSyncFailed: "Unable to sync the GitHub Issues local index.",
       openLinkFailed: "Unable to open the link.",
       updateCurrent: "OpenGlance is up to date.",
       updateAvailable: "An update is available.",
@@ -210,6 +234,30 @@
       noEnvironmentStatus: "暂无环境检查信息。",
       repositoryStatus: "当前仓库",
       noRepositoryStatus: "当前没有打开仓库。",
+      githubIssuesStatus: "GitHub Issues 本地索引",
+      noGithubIssuesStatus: "尚未配置 GitHub Issues 仓库。",
+      githubIssuesScopeTitle: "GitHub Issues 仓库范围",
+      githubIssuesScopeDescription: "只有这里列出的仓库会同步到本机私有索引。每行填写一个 owner/name。",
+      githubIssuesRepositoriesLabel: "仓库",
+      githubIssuesRepositoriesPlaceholder: "owner/repository",
+      saveGithubIssuesRepositories: "保存仓库范围",
+      savingGithubIssuesRepositories: "正在保存仓库范围…",
+      githubIssuesRepositoriesSaved: "仓库范围已保存。",
+      githubIssuesRepositoriesRequired: "请至少填写一个 owner/name 格式的仓库。",
+      githubIssuesRepositoriesEnvironment: "当前范围由 OPENGLANCE_GITHUB_ISSUES_REPOSITORIES 管理，App 内只读。",
+      githubIssuesRepositoriesInvalid: "本地仓库范围配置无效；请先用 OpenGlance CLI 修复，再在 App 中维护。",
+      githubIssuesRepositoriesSaveFailedShort: "仓库范围未保存",
+      githubIssuesRepositoriesSaveFailed: "无法保存 GitHub Issues 仓库范围。",
+      githubIssuesActionsAria: "GitHub Issues 操作",
+      syncGithubIssues: "同步 GitHub Issues",
+      syncingGithubIssues: "正在同步 GitHub Issues…",
+      githubIssuesSyncComplete: "已同步 {completed}/{requested} 个仓库，共使用 {requests} 个 API 分页请求。",
+      githubIssuesSyncInProgress: "另一个进程正在同步 {count} 个仓库；现有快照仍可查询。",
+      githubIssuesSyncBudgetPaused: "为保留 GitHub API 安全预算，同步已暂停：完成 {completed}/{requested} 个，延后 {deferred} 个。",
+      githubIssuesSyncRateLimited: "GitHub 限流已中止同步：完成 {completed}/{requested} 个，延后 {deferred} 个。",
+      githubIssuesSyncPartial: "同步完成，但有 {failed} 个仓库失败。",
+      githubIssuesSyncFailedShort: "Issue 同步失败",
+      githubIssuesSyncFailed: "无法同步 GitHub Issues 本地索引。",
       openLinkFailed: "无法打开链接。",
       updateCurrent: "OpenGlance 已经是最新版本。",
       updateAvailable: "发现可用更新。",
@@ -230,6 +278,15 @@
   const shortcutGroups = document.querySelector("#shortcut-groups");
   const appStatus = document.querySelector("#app-status");
   const environmentStatus = document.querySelector("#environment-status");
+  const githubIssuesStatus = document.querySelector("#github-issues-status");
+  const githubIssuesConfiguration = document.querySelector("#github-issues-configuration");
+  const githubIssuesRepositories = document.querySelector("#github-issues-repositories");
+  const githubIssuesConfigurationNote = document.querySelector("#github-issues-configuration-note");
+  const saveGithubIssuesRepositoriesButton = document.querySelector("#save-github-issues-repositories");
+  const githubIssuesConfigurationResult = document.querySelector("#github-issues-configuration-result");
+  const githubIssuesActions = document.querySelector("#github-issues-actions");
+  const syncGithubIssuesButton = document.querySelector("#sync-github-issues");
+  const githubIssuesSyncResult = document.querySelector("#github-issues-sync-result");
   const repositoryStatus = document.querySelector("#repository-status");
   const updateActions = document.querySelector(".status-actions");
   const checkForUpdatesButton = document.querySelector("#check-for-updates");
@@ -244,6 +301,8 @@
   let saveGeneration = 0;
   let saveQueue = Promise.resolve();
   let updateCheckGeneration = 0;
+  let githubIssuesSyncGeneration = 0;
+  let githubIssuesConfigurationGeneration = 0;
   let helpScrollFrame = 0;
 
   navigation.addEventListener("click", handleNavigationClick);
@@ -264,6 +323,8 @@
   }
 
   checkForUpdatesButton.addEventListener("click", checkForUpdates);
+  syncGithubIssuesButton.addEventListener("click", syncGithubIssues);
+  saveGithubIssuesRepositoriesButton.addEventListener("click", configureGithubIssues);
   api.onShow((payload) => {
     if (payload?.model) {
       applyModel(payload.model);
@@ -401,6 +462,64 @@
     } finally {
       if (generation === updateCheckGeneration) {
         checkForUpdatesButton.disabled = false;
+      }
+    }
+  }
+
+  async function syncGithubIssues() {
+    const generation = ++githubIssuesSyncGeneration;
+    syncGithubIssuesButton.disabled = true;
+    githubIssuesSyncResult.textContent = t("syncingGithubIssues");
+    try {
+      const response = await api.syncGithubIssues();
+      if (generation !== githubIssuesSyncGeneration) {
+        return;
+      }
+      githubIssuesSyncResult.textContent = githubIssuesSyncMessage(response?.result);
+    } catch (error) {
+      if (generation !== githubIssuesSyncGeneration) {
+        return;
+      }
+      githubIssuesSyncResult.textContent = t("githubIssuesSyncFailedShort");
+      showError(errorMessage(error, t("githubIssuesSyncFailed")));
+    } finally {
+      if (generation === githubIssuesSyncGeneration) {
+        syncGithubIssuesButton.disabled = false;
+      }
+    }
+  }
+
+  async function configureGithubIssues() {
+    const repositories = githubIssuesRepositories.value
+      .split(/[\s,]+/u)
+      .map((repository) => repository.trim())
+      .filter(Boolean);
+    if (repositories.length === 0) {
+      githubIssuesConfigurationResult.textContent = t("githubIssuesRepositoriesRequired");
+      return;
+    }
+    const generation = ++githubIssuesConfigurationGeneration;
+    saveGithubIssuesRepositoriesButton.disabled = true;
+    githubIssuesConfigurationResult.textContent = t("savingGithubIssuesRepositories");
+    try {
+      const response = await api.configureGithubIssues(repositories);
+      if (generation !== githubIssuesConfigurationGeneration) {
+        return;
+      }
+      if (Array.isArray(response?.result?.repositories)) {
+        githubIssuesRepositories.value = response.result.repositories.join("\n");
+      }
+      githubIssuesConfigurationResult.textContent = t("githubIssuesRepositoriesSaved");
+      hideError();
+    } catch (error) {
+      if (generation !== githubIssuesConfigurationGeneration) {
+        return;
+      }
+      githubIssuesConfigurationResult.textContent = t("githubIssuesRepositoriesSaveFailedShort");
+      showError(errorMessage(error, t("githubIssuesRepositoriesSaveFailed")));
+    } finally {
+      if (generation === githubIssuesConfigurationGeneration) {
+        saveGithubIssuesRepositoriesButton.disabled = false;
       }
     }
   }
@@ -694,6 +813,8 @@
   function renderStatus(value) {
     const status = isRecord(value) ? value : {};
     updateActions.hidden = status.updatesEnabled !== true;
+    githubIssuesActions.hidden = status.githubIssuesConfigured !== true;
+    renderGithubIssuesConfiguration(status.githubIssuesConfiguration);
     renderStatusBlock(
       appStatus,
       t("appStatus"),
@@ -707,11 +828,73 @@
       t("noEnvironmentStatus"),
     );
     renderStatusBlock(
+      githubIssuesStatus,
+      t("githubIssuesStatus"),
+      status.githubIssues,
+      t("noGithubIssuesStatus"),
+    );
+    renderStatusBlock(
       repositoryStatus,
       t("repositoryStatus"),
       status.repository,
       t("noRepositoryStatus"),
     );
+  }
+
+  function renderGithubIssuesConfiguration(value) {
+    const configuration = isRecord(value) ? value : null;
+    githubIssuesConfiguration.hidden = !configuration;
+    if (!configuration) {
+      return;
+    }
+    const repositories = Array.isArray(configuration.repositories)
+      ? configuration.repositories.filter((repository) => typeof repository === "string")
+      : [];
+    githubIssuesRepositories.value = repositories.join("\n");
+    const writable = configuration.writable === true;
+    githubIssuesRepositories.disabled = !writable;
+    saveGithubIssuesRepositoriesButton.hidden = !writable;
+    githubIssuesConfigurationNote.hidden = writable;
+    githubIssuesConfigurationNote.textContent = writable
+      ? ""
+      : configuration.source === "environment"
+        ? t("githubIssuesRepositoriesEnvironment")
+        : t("githubIssuesRepositoriesInvalid");
+  }
+
+  function githubIssuesSyncMessage(value) {
+    if (!isRecord(value)) {
+      return t("githubIssuesSyncFailedShort");
+    }
+    if (value.status === "complete") {
+      return interpolate(t("githubIssuesSyncComplete"), {
+        completed: value.completedRepositories,
+        requested: value.requestedRepositories,
+        requests: value.apiRequests,
+      });
+    }
+    if (value.status === "sync_in_progress") {
+      return interpolate(t("githubIssuesSyncInProgress"), {
+        count: value.inProgressRepositories,
+      });
+    }
+    if (value.status === "partial_rate_budget") {
+      return interpolate(t("githubIssuesSyncBudgetPaused"), {
+        completed: value.completedRepositories,
+        requested: value.requestedRepositories,
+        deferred: value.deferredRepositories,
+      });
+    }
+    if (value.status === "rate_limited") {
+      return interpolate(t("githubIssuesSyncRateLimited"), {
+        completed: value.completedRepositories,
+        requested: value.requestedRepositories,
+        deferred: value.deferredRepositories,
+      });
+    }
+    return interpolate(t("githubIssuesSyncPartial"), {
+      failed: value.failedRepositories,
+    });
   }
 
   function renderStatusBlock(container, titleValue, value, emptyMessage) {
@@ -883,6 +1066,10 @@
     return string || fallback;
   }
 
+  function interpolate(template, values) {
+    return String(template).replace(/\{([^}]+)\}/gu, (_match, key) => String(values[key] ?? ""));
+  }
+
   function errorMessage(_error, fallback) {
     return fallback;
   }
@@ -915,8 +1102,14 @@
     currentLanguage = nextLanguage;
     if (languageChanged) {
       updateCheckGeneration += 1;
+      githubIssuesSyncGeneration += 1;
+      githubIssuesConfigurationGeneration += 1;
       updateCheckResult.textContent = "";
+      githubIssuesSyncResult.textContent = "";
+      githubIssuesConfigurationResult.textContent = "";
       checkForUpdatesButton.disabled = false;
+      syncGithubIssuesButton.disabled = false;
+      saveGithubIssuesRepositoriesButton.disabled = false;
     }
     document.documentElement.lang = currentLanguage;
     document.documentElement.dataset.language = currentLanguage;
@@ -926,6 +1119,9 @@
     }
     for (const element of document.querySelectorAll("[data-i18n-aria-label]")) {
       element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+    }
+    for (const element of document.querySelectorAll("[data-i18n-placeholder]")) {
+      element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
     }
   }
 

@@ -607,7 +607,8 @@ button {
 }
 
 .shortcut-group,
-.status-block {
+.status-block,
+.github-issues-configuration {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -757,11 +758,55 @@ kbd {
   margin-top: 14px;
 }
 
+.github-issues-configuration {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.github-issues-configuration[hidden] {
+  display: none;
+}
+
+.repository-scope-field {
+  display: grid;
+  gap: 7px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.repository-scope-field textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 10px 11px;
+}
+
+.repository-scope-field textarea:focus-visible {
+  border-color: var(--accent);
+  outline: 3px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.repository-scope-field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .status-block:first-of-type {
   margin-top: 0;
 }
 
-.status-actions {
+.status-actions,
+.repository-scope-actions {
   display: flex;
   min-height: 38px;
   align-items: center;
@@ -769,7 +814,8 @@ kbd {
   margin: 10px 0 18px;
 }
 
-.status-actions button {
+.status-actions button,
+.repository-scope-actions button {
   min-height: 32px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -781,18 +827,21 @@ kbd {
   padding: 0 12px;
 }
 
-.status-actions button:hover:not(:disabled) {
+.status-actions button:hover:not(:disabled),
+.repository-scope-actions button:hover:not(:disabled) {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent-strong);
 }
 
-.status-actions button:disabled {
+.status-actions button:disabled,
+.repository-scope-actions button:disabled {
   cursor: wait;
   opacity: 0.62;
 }
 
-.status-actions span {
+.status-actions span,
+.repository-scope-actions span {
   color: var(--muted);
   font-size: 12px;
 }

@@ -291,6 +291,45 @@
               <span id="update-check-result" role="status" aria-live="polite"></span>
             </div>
             <div id="environment-status" class="status-block"></div>
+            <div id="github-issues-status" class="status-block"></div>
+            <section
+              id="github-issues-configuration"
+              class="github-issues-configuration"
+              aria-labelledby="github-issues-configuration-title"
+              hidden
+            >
+              <div class="setting-copy">
+                <h2 id="github-issues-configuration-title" data-i18n="githubIssuesScopeTitle">GitHub Issues repository scope</h2>
+                <p data-i18n="githubIssuesScopeDescription">Only these repositories are synchronized into the private local index. Enter one owner/name per line.</p>
+              </div>
+              <label class="repository-scope-field" for="github-issues-repositories">
+                <span data-i18n="githubIssuesRepositoriesLabel">Repositories</span>
+                <textarea
+                  id="github-issues-repositories"
+                  rows="4"
+                  maxlength="10000"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="owner/repository"
+                  data-i18n-placeholder="githubIssuesRepositoriesPlaceholder"
+                ></textarea>
+              </label>
+              <p id="github-issues-configuration-note" class="boundary-note" hidden></p>
+              <div class="repository-scope-actions">
+                <button id="save-github-issues-repositories" type="button" data-i18n="saveGithubIssuesRepositories">Save repository scope</button>
+                <span id="github-issues-configuration-result" role="status" aria-live="polite"></span>
+              </div>
+            </section>
+            <div
+              id="github-issues-actions"
+              class="status-actions"
+              aria-label="GitHub Issues actions"
+              data-i18n-aria-label="githubIssuesActionsAria"
+              hidden
+            >
+              <button id="sync-github-issues" type="button" data-i18n="syncGithubIssues">Sync GitHub Issues</button>
+              <span id="github-issues-sync-result" role="status" aria-live="polite"></span>
+            </div>
             <div id="repository-status" class="status-block"></div>
           </section>
 

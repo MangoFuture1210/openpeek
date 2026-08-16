@@ -114,6 +114,15 @@ import { syncSelectedFiles } from "../server/git-sync.mjs";
 import { listGitWorktrees } from "../server/git-worktrees.mjs";
 import { findRepoRoot } from "../server/paths.mjs";
 import { findGithubRepositoryRoot } from "../server/repositories.mjs";
+import { openGithubIssuesStore } from "../server/github-issues-store.mjs";
+import {
+  configuredGithubIssueRepositoryIds,
+  configuredGithubIssueRepositories,
+  loadGithubIssuesRepositoryConfig,
+  writeGithubIssuesRepositoryConfig,
+} from "../server/github-issues-repositories.mjs";
+import { resolveGithubAccount } from "../server/github-issues-sync.mjs";
+import { syncGithubIssueRepositories } from "../server/github-issues-service.mjs";
 import {
   adjacentRepository,
   repositoryAfterClose,
@@ -718,6 +727,8 @@ function installSettingsCenterController(browserWindow) {
       await updateCheckScheduler?.checkManually();
       return desktopUpdateStatus;
     },
+    syncGithubIssues: syncDesktopGithubIssues,
+    configureGithubIssues: configureDesktopGithubIssues,
   });
   browserWindow.on("resize", () => {
     settingsCenter?.resize();
@@ -1335,7 +1346,10 @@ function settingsCenterHelpSections(resolvedLanguage) {
 
 async function settingsCenterStatus(resolvedLanguage) {
   const translate = createDesktopTranslatorForLanguage(resolvedLanguage);
-  const environment = await desktopEnvironmentChecks({ language: resolvedLanguage });
+  const [environment, githubIssues] = await Promise.all([
+    desktopEnvironmentChecks({ language: resolvedLanguage }),
+    settingsCenterGithubIssuesStatus(resolvedLanguage),
+  ]);
   return {
     updatesEnabled: DESKTOP_UPDATES_ENABLED,
     app: {
@@ -1363,7 +1377,130 @@ async function settingsCenterStatus(resolvedLanguage) {
       },
     },
     environment,
+    githubIssuesConfigured: githubIssues.configured,
+    githubIssues: githubIssues.rows,
+    githubIssuesConfiguration: githubIssues.configuration,
     repository: await settingsCenterRepositoryStatus(resolvedLanguage),
+  };
+}
+
+async function settingsCenterGithubIssuesStatus(resolvedLanguage) {
+  let config;
+  try {
+    config = await loadGithubIssuesRepositoryConfig();
+  } catch {
+    return {
+      configured: false,
+      configuration: {
+        source: "invalid",
+        writable: false,
+        repositories: [],
+      },
+      rows: [{
+        label: resolvedLanguage === "zh-CN" ? "本地索引" : "Local index",
+        value: resolvedLanguage === "zh-CN" ? "仓库配置无效" : "Repository configuration is invalid",
+        status: "error",
+      }],
+    };
+  }
+  const entries = configuredGithubIssueRepositories(config.repositories);
+  if (entries.length === 0) {
+    return {
+      configured: false,
+      configuration: githubIssuesConfiguration(config, entries),
+      rows: [],
+    };
+  }
+
+  let store;
+  try {
+    store = await openGithubIssuesStore();
+    const account = store.defaultAccount();
+    return {
+      configured: true,
+      configuration: githubIssuesConfiguration(config, entries),
+      rows: entries.map((entry) => {
+        const status = account
+          ? store.repositoryStatus({ account, repository: entry.repository })
+          : null;
+        return {
+          label: entry.name,
+          value: githubIssuesSnapshotStatusMessage(status, resolvedLanguage),
+          status: status?.lastSyncErrorCode
+            ? "warning"
+            : status?.hasSnapshot
+              ? "ok"
+              : "warning",
+        };
+      }),
+    };
+  } catch {
+    return {
+      configured: true,
+      configuration: githubIssuesConfiguration(config, entries),
+      rows: [{
+        label: resolvedLanguage === "zh-CN" ? "本地索引" : "Local index",
+        value: resolvedLanguage === "zh-CN" ? "无法读取本地快照" : "Unable to read the local snapshot",
+        status: "error",
+      }],
+    };
+  } finally {
+    store?.close();
+  }
+}
+
+function githubIssuesConfiguration(config, entries) {
+  return {
+    source: config.source,
+    writable: config.source !== "environment",
+    repositories: entries.map((entry) => entry.repository),
+  };
+}
+
+function githubIssuesSnapshotStatusMessage(status, resolvedLanguage) {
+  if (!status?.hasSnapshot) {
+    return resolvedLanguage === "zh-CN" ? "尚未建立本地快照" : "No local snapshot yet";
+  }
+  const syncedAt = new Intl.DateTimeFormat(
+    resolvedLanguage === "zh-CN" ? "zh-CN" : "en",
+    { dateStyle: "medium", timeStyle: "short" },
+  ).format(new Date(status.lastSyncedAt));
+  const summary = resolvedLanguage === "zh-CN"
+    ? `${status.issueCount} 条 Issue · ${status.commentCount} 条评论 · ${syncedAt}`
+    : `${status.issueCount} Issues · ${status.commentCount} comments · ${syncedAt}`;
+  if (!status.lastSyncErrorCode) {
+    return summary;
+  }
+  return resolvedLanguage === "zh-CN"
+    ? `${summary} · 最近同步失败`
+    : `${summary} · latest sync failed`;
+}
+
+async function syncDesktopGithubIssues() {
+  const config = await loadGithubIssuesRepositoryConfig();
+  const repositories = configuredGithubIssueRepositoryIds(config.repositories);
+  if (repositories.length === 0) {
+    throw new Error("No GitHub Issues repositories are configured.");
+  }
+  const store = await openGithubIssuesStore();
+  try {
+    const account = await resolveGithubAccount();
+    return await syncGithubIssueRepositories({
+      store,
+      account,
+      repositories,
+      isolateFailures: true,
+    });
+  } finally {
+    store.close();
+  }
+}
+
+async function configureDesktopGithubIssues(repositories) {
+  const config = await writeGithubIssuesRepositoryConfig({ repositories });
+  return {
+    source: config.source,
+    repositories: configuredGithubIssueRepositoryIds(config.repositories),
   };
 }
 

@@ -26,6 +26,17 @@ contextBridge.exposeInMainWorld("openGlanceSettings", Object.freeze({
     return ipcRenderer.invoke(CHANNELS.action, { type: "check-for-updates" });
   },
 
+  syncGithubIssues() {
+    return ipcRenderer.invoke(CHANNELS.action, { type: "sync-github-issues" });
+  },
+
+  configureGithubIssues(repositories) {
+    return ipcRenderer.invoke(CHANNELS.action, {
+      type: "configure-github-issues",
+      repositories: Array.isArray(repositories) ? repositories : [],
+    });
+  },
+
   openExternal(url) {
     return ipcRenderer.invoke(CHANNELS.action, {
       type: "open-external",

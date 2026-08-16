@@ -11,7 +11,7 @@ Future release profiles, signing credentials, update infrastructure, or the offi
 - macOS, Windows, or Linux for the local browser workbench;
 - macOS or Windows for the packaged desktop app;
 - Git;
-- Node.js 22 or newer;
+- Node.js 22.13 or newer;
 - npm as supplied with Node.js.
 
 ## Run the desktop app
@@ -47,6 +47,25 @@ npm start -- /path/to/knowledge-repository/README.md --no-open
 
 The service binds to localhost. The browser entry is intended for local development and does not expose
 the repository to the LAN.
+
+## Run the GitHub Issues local index
+
+The optional Agent/maintainer CLI also requires an authenticated GitHub CLI. It does not start the
+browser workbench or desktop app:
+
+```bash
+gh auth status
+node src/cli.mjs issues configure example/docs example/app
+node src/cli.mjs issues sync --all
+node src/cli.mjs issues search "network retry" --all --json
+```
+
+For a source checkout that should expose the `openglance`, `openpeek`, and `git-leaf` commands on the
+current development machine, run `npm link`; this creates a global link back to the checkout and is not
+part of a packaged or official release. Run `npm unlink --global openglance` to remove it.
+
+The complete storage, privacy, rate-limit, and authority contract is in the
+[GitHub Issues local index guide](github-issues-local-index.md).
 
 ## Package a Community Build
 

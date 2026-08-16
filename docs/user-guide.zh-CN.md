@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-15
+last_updated: 2026-08-16
 ---
 
 # OpenGlance 用户手册
@@ -410,6 +410,11 @@ OpenGlance 保持以文档为中心，但仍然让周边证据可以被查看：
 
 同一页面还包含 OpenGlance 帮助、文件类型支持、环境与仓库状态，以及完整快捷键列表。在 macOS 使用
 `Command+?`，在 Windows 使用 `Ctrl+?` 可以直接打开快捷键。
+
+配置了可选的 GitHub Issues 本地索引仓库范围后，“关于与状态”还会显示每个仓库的 Issue 数、已索引评论数、
+最近成功快照和最近失败状态。“同步 GitHub Issues”会显式、逐仓库运行同步；仅仅打开设置页不会自动访问
+GitHub。同一页面可以用受限的 `owner/name` 清单替换本机 allowlist；环境变量管理的清单仍保持只读，仓库内容不能扩大
+私有 GitHub 范围。完整说明见 [GitHub Issues 本地索引指南](github-issues-local-index.md)。
 
 ## 什么时候应该换用其他工具
 

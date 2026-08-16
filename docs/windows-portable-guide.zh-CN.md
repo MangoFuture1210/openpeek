@@ -49,7 +49,7 @@ OpenPeek 2.x 或 Git Leaf 1.x 的固定安装升级到 OpenGlance 3.0 时，对�
 
 ## Community Build
 
-在 Node.js 22 或更高版本的源码 checkout 中运行：
+在 Node.js 22.13 或更高版本的源码 checkout 中运行：
 
 ```powershell
 npm ci

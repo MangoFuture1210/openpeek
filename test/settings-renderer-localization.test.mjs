@@ -36,6 +36,9 @@ test("settings page exposes bounded language and Git check choices and stays hid
     html,
     /class="language-sample" aria-hidden="true" data-i18n="languageAuto">Auto<\/span>/,
   );
+  assert.match(html, /id="github-issues-repositories"/);
+  assert.match(html, /id="save-github-issues-repositories"/);
+  assert.match(html, /data-i18n-placeholder="githubIssuesRepositoriesPlaceholder"/);
   assert.match(styles, /:root\[data-settings-ready="false"\] body\s*\{\s*visibility: hidden;/);
 });
 
@@ -281,7 +284,148 @@ test("settings renderer keeps localized Chinese error summaries ahead of technic
   assert.doesNotMatch(harness.errorBox.textContent, /Error invoking remote method/);
 });
 
-function settingsModel({ language, resolvedLanguage, helpTitle }) {
+test("settings renderer exposes configured Issue sync and reports API pages", async () => {
+  const source = await readFile(SETTINGS_RENDERER_PATH, "utf8");
+  const initialModel = settingsModel({
+    language: "zh-CN",
+    resolvedLanguage: "zh-CN",
+    helpTitle: "仓库文件",
+    status: {
+      githubIssuesConfigured: true,
+      githubIssues: [{ label: "docs", value: "12 条 Issue", status: "ok" }],
+    },
+  });
+  const harness = createRendererHarness({
+    initialModel,
+    syncGithubIssues: async () => ({
+      result: {
+        status: "complete",
+        completedRepositories: 2,
+        requestedRepositories: 2,
+        apiRequests: 4,
+      },
+    }),
+  });
+
+  vm.runInNewContext(source, harness.context, {
+    filename: SETTINGS_RENDERER_PATH,
+  });
+  await settle();
+
+  assert.equal(harness.githubIssuesActions.hidden, false);
+  harness.syncGithubIssuesButton.dispatch("click", {});
+  assert.equal(harness.syncGithubIssuesButton.disabled, true);
+  await settle();
+
+  assert.equal(harness.issueSyncs, 1);
+  assert.equal(harness.syncGithubIssuesButton.disabled, false);
+  assert.equal(
+    harness.githubIssuesSyncResult.textContent,
+    "已同步 2/2 个仓库，共使用 4 个 API 分页请求。",
+  );
+});
+
+test("settings renderer saves a bounded GitHub Issues repository scope", async () => {
+  const source = await readFile(SETTINGS_RENDERER_PATH, "utf8");
+  const initialModel = settingsModel({
+    language: "zh-CN",
+    resolvedLanguage: "zh-CN",
+    helpTitle: "仓库文件",
+    status: {
+      githubIssuesConfiguration: {
+        source: "file",
+        writable: true,
+        repositories: ["example/docs"],
+      },
+    },
+  });
+  const harness = createRendererHarness({
+    initialModel,
+    configureGithubIssues: async (repositories) => ({
+      result: { source: "file", repositories },
+    }),
+  });
+
+  vm.runInNewContext(source, harness.context, {
+    filename: SETTINGS_RENDERER_PATH,
+  });
+  await settle();
+
+  assert.equal(harness.githubIssuesConfiguration.hidden, false);
+  assert.equal(harness.githubIssuesRepositories.value, "example/docs");
+  harness.githubIssuesRepositories.value = "Example/Docs\nExample/App.git";
+  harness.saveGithubIssuesRepositoriesButton.dispatch("click", {});
+  assert.equal(harness.saveGithubIssuesRepositoriesButton.disabled, true);
+  await settle();
+
+  assert.deepEqual(harness.issueConfigurations, [["Example/Docs", "Example/App.git"]]);
+  assert.equal(harness.githubIssuesRepositories.value, "Example/Docs\nExample/App.git");
+  assert.equal(harness.githubIssuesConfigurationResult.textContent, "仓库范围已保存。");
+  assert.equal(harness.saveGithubIssuesRepositoriesButton.disabled, false);
+});
+
+test("settings renderer keeps an environment-managed Issue scope read-only", async () => {
+  const source = await readFile(SETTINGS_RENDERER_PATH, "utf8");
+  const initialModel = settingsModel({
+    language: "en",
+    resolvedLanguage: "en",
+    helpTitle: "Repository files",
+    status: {
+      githubIssuesConfiguration: {
+        source: "environment",
+        writable: false,
+        repositories: ["example/docs"],
+      },
+    },
+  });
+  const harness = createRendererHarness({ initialModel });
+
+  vm.runInNewContext(source, harness.context, {
+    filename: SETTINGS_RENDERER_PATH,
+  });
+  await settle();
+
+  assert.equal(harness.githubIssuesRepositories.disabled, true);
+  assert.equal(harness.saveGithubIssuesRepositoriesButton.hidden, true);
+  assert.equal(harness.githubIssuesConfigurationNote.hidden, false);
+  assert.match(harness.githubIssuesConfigurationNote.textContent, /managed by OPENGLANCE/);
+});
+
+test("settings renderer explains a GitHub API reserve-budget stop", async () => {
+  const source = await readFile(SETTINGS_RENDERER_PATH, "utf8");
+  const initialModel = settingsModel({
+    language: "en",
+    resolvedLanguage: "en",
+    helpTitle: "Repository files",
+    status: {
+      githubIssuesConfigured: true,
+      githubIssues: [{ label: "docs", value: "12 Issues", status: "ok" }],
+    },
+  });
+  const harness = createRendererHarness({
+    initialModel,
+    syncGithubIssues: async () => ({
+      result: {
+        status: "partial_rate_budget",
+        completedRepositories: 1,
+        requestedRepositories: 3,
+        deferredRepositories: 1,
+      },
+    }),
+  });
+
+  vm.runInNewContext(source, harness.context, {
+    filename: SETTINGS_RENDERER_PATH,
+  });
+  await settle();
+  harness.syncGithubIssuesButton.dispatch("click", {});
+  await settle();
+
+  assert.match(harness.githubIssuesSyncResult.textContent, /reserved GitHub API budget/);
+  assert.match(harness.githubIssuesSyncResult.textContent, /1\/3 complete/);
+});
+
+function settingsModel({ language, resolvedLanguage, helpTitle, status = {} }) {
   return {
     preferences: {
       language,
@@ -295,7 +439,7 @@ function settingsModel({ language, resolvedLanguage, helpTitle }) {
     resolvedLanguage,
     helpSections: [{ id: "repository-files", title: helpTitle, body: [] }],
     shortcutGroups: [],
-    status: {},
+    status,
   };
 }
 
@@ -304,9 +448,13 @@ function createRendererHarness({
   saveResponse,
   updatePreferences,
   checkForUpdates,
+  syncGithubIssues,
+  configureGithubIssues,
 }) {
   const listeners = new Map();
   const savedPatches = [];
+  let issueSyncs = 0;
+  const issueConfigurations = [];
   const elements = new Map();
   const radios = new Map();
   const documentElement = new FakeElement();
@@ -324,6 +472,15 @@ function createRendererHarness({
     "#shortcut-groups",
     "#app-status",
     "#environment-status",
+    "#github-issues-status",
+    "#github-issues-configuration",
+    "#github-issues-repositories",
+    "#github-issues-configuration-note",
+    "#save-github-issues-repositories",
+    "#github-issues-configuration-result",
+    "#github-issues-actions",
+    "#sync-github-issues",
+    "#github-issues-sync-result",
     "#repository-status",
     ".status-actions",
     "#check-for-updates",
@@ -419,6 +576,18 @@ function createRendererHarness({
         ? checkForUpdates()
         : {};
     },
+    async syncGithubIssues() {
+      issueSyncs += 1;
+      return typeof syncGithubIssues === "function"
+        ? syncGithubIssues()
+        : {};
+    },
+    async configureGithubIssues(repositories) {
+      issueConfigurations.push([...repositories]);
+      return typeof configureGithubIssues === "function"
+        ? configureGithubIssues(repositories)
+        : {};
+    },
     async openExternal() {},
     onShow(listener) {
       Promise.resolve().then(() => listener({ model: initialModel }));
@@ -457,9 +626,21 @@ function createRendererHarness({
     appStatus: elements.get("#app-status"),
     checkForUpdatesButton: elements.get("#check-for-updates"),
     updateCheckResult: elements.get("#update-check-result"),
+    githubIssuesActions: elements.get("#github-issues-actions"),
+    githubIssuesConfiguration: elements.get("#github-issues-configuration"),
+    githubIssuesRepositories: elements.get("#github-issues-repositories"),
+    githubIssuesConfigurationNote: elements.get("#github-issues-configuration-note"),
+    saveGithubIssuesRepositoriesButton: elements.get("#save-github-issues-repositories"),
+    githubIssuesConfigurationResult: elements.get("#github-issues-configuration-result"),
+    syncGithubIssuesButton: elements.get("#sync-github-issues"),
+    githubIssuesSyncResult: elements.get("#github-issues-sync-result"),
     errorBox: elements.get("#settings-error"),
     remoteCheckInterval,
     savedPatches,
+    issueConfigurations,
+    get issueSyncs() {
+      return issueSyncs;
+    },
     radio(name, value) {
       return radios.get(`${name}:${value}`);
     },
