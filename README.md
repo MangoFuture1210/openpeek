@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-15
+last_updated: 2026-08-16
 ---
 
 # OpenGlance
@@ -62,6 +62,9 @@ than Obsidian.
 - **Agent-readable data, human-readable visuals.** Standard Mermaid fences and controlled MDX keep
   diagrams, charts, tables, and metrics as readable repository text that agents can edit and OpenGlance
   can render for people.
+- **Optional local GitHub Issues reads for agents.** An explicit, rate-budgeted sync stores configured
+  Issue bodies, comments, metadata, coverage, and freshness outside Git; later search and detail commands
+  are offline SQLite reads while GitHub remains authoritative.
 
 [**Download for macOS**](https://gitleaf.mangofuture.com/download#macos) ·
 [Windows Preview](https://gitleaf.mangofuture.com/download#windows) ·
@@ -86,8 +89,33 @@ part of that repository, but the repository's operational role is broader than h
   the original paths, files, branches, revisions, and instructions.
 - **People use OpenGlance.** They get a familiar file tree, search, readable Preview, and focused editing
   without moving the content into another system.
-- **Git remains the shared source of truth.** OpenGlance does not import, index, or copy the repository
-  into a separate knowledge service.
+- **Git remains the shared context source of truth.** OpenGlance does not import, index, or copy repository
+  files into a separate knowledge service. Its optional GitHub Issues cache is a discardable read model of
+  GitHub task data, not a second task system.
+
+## Local GitHub Issues for agents
+
+The global CLI and desktop Settings center can maintain a read-only local index for an explicit repository
+allowlist. The public source contains no private repository defaults. Configure the local scope once, run an
+explicit sync, and let agents use structured offline queries without starting the OpenGlance document server:
+
+```bash
+openglance issues configure example/docs example/app
+openglance issues sync --all --json
+openglance issues search "network retry" --all --json
+openglance issues show example/docs#123 --json
+openglance issues status --all --json
+```
+
+Only `sync` calls GitHub through the already authenticated `gh` CLI. A first/full sync indexes Issue bodies,
+comments, and common metadata; later syncs use an overlapped incremental cursor. OpenGlance checks GitHub's
+current REST budget before every repository, preserves a 20% reserve derived from the returned limit, reports
+actual Issue/comment API pages, prevents duplicate account-wide writers, and stops the batch before its
+estimated cost would enter the reserve. Transient failures keep the previous snapshot; confirmed loss of
+repository access purges that private scope. A local miss is never proof that GitHub has no matching Issue.
+
+See the [GitHub Issues local index guide](docs/github-issues-local-index.md) for the storage paths, privacy
+boundary, JSON contract, incremental semantics, rate-limit behavior, and desktop status surface.
 
 ## The human loop
 
@@ -206,7 +234,7 @@ explicitly labeled unsigned Preview; verify the published SHA-256 checksum befor
 
 ### Run from source
 
-Running from source requires Node.js 22 or newer and Git:
+Running from source requires Node.js 22.13 or newer and Git:
 
 ```bash
 npm ci

@@ -90,6 +90,28 @@ test("settings preference patches and actions expose only approved values", () =
 
   assert.deepEqual(normalizeSettingsAction("close"), { type: "close" });
   assert.deepEqual(normalizeSettingsAction("check-for-updates"), { type: "check-for-updates" });
+  assert.deepEqual(normalizeSettingsAction("sync-github-issues"), {
+    type: "sync-github-issues",
+  });
+  assert.deepEqual(normalizeSettingsAction({
+    type: "configure-github-issues",
+    repositories: ["Example/Docs.git", "example/app"],
+  }), {
+    type: "configure-github-issues",
+    repositories: ["example/docs", "example/app"],
+  });
+  assert.equal(normalizeSettingsAction({
+    type: "configure-github-issues",
+    repositories: [],
+  }), null);
+  assert.equal(normalizeSettingsAction({
+    type: "configure-github-issues",
+    repositories: ["not a repository"],
+  }), null);
+  assert.equal(normalizeSettingsAction({
+    type: "configure-github-issues",
+    repositories: Array.from({ length: 51 }, (_, index) => `owner/repo-${index}`),
+  }), null);
   assert.deepEqual(normalizeSettingsAction({ type: "open-external", url: "https://example.com/help" }), {
     type: "open-external",
     url: "https://example.com/help",
@@ -297,6 +319,8 @@ test("settings IPC authorizes its own view and whitelists model, preference, and
     documentFontSize: 17,
   };
   let updateChecks = 0;
+  let issueSyncs = 0;
+  const issueConfigurations = [];
   const harness = createHarness({
     getPreferences: async () => currentPreferences,
     savePreferences: async (patch) => {
@@ -322,6 +346,14 @@ test("settings IPC authorizes its own view and whitelists model, preference, and
     checkForUpdates: async () => {
       updateChecks += 1;
       return { state: "current", message: "OpenGlance 已经是最新版本。" };
+    },
+    syncGithubIssues: async () => {
+      issueSyncs += 1;
+      return { status: "complete", completedRepositories: 2 };
+    },
+    configureGithubIssues: async (repositories) => {
+      issueConfigurations.push(repositories);
+      return { source: "file", repositories };
     },
   });
   const controller = harness.createController();
@@ -392,6 +424,33 @@ test("settings IPC authorizes its own view and whitelists model, preference, and
     ok: true,
     result: { state: "current", message: "OpenGlance 已经是最新版本。" },
   });
+  const issueSyncResult = await harness.ipcMain.invoke(
+    SETTINGS_CENTER_CHANNELS.action,
+    sender,
+    { type: "sync-github-issues" },
+  );
+  assert.equal(issueSyncs, 1);
+  assert.deepEqual(issueSyncResult, {
+    ok: true,
+    result: { status: "complete", completedRepositories: 2 },
+  });
+  const issueConfigurationResult = await harness.ipcMain.invoke(
+    SETTINGS_CENTER_CHANNELS.action,
+    sender,
+    {
+      type: "configure-github-issues",
+      repositories: ["Example/Docs", "Example/App.git"],
+      ignored: "value",
+    },
+  );
+  assert.deepEqual(issueConfigurations, [["example/docs", "example/app"]]);
+  assert.deepEqual(issueConfigurationResult, {
+    ok: true,
+    result: {
+      source: "file",
+      repositories: ["example/docs", "example/app"],
+    },
+  });
   await assert.rejects(
     () => harness.ipcMain.invoke(
       SETTINGS_CENTER_CHANNELS.action,
@@ -423,6 +482,8 @@ test("settings page and preload keep a bounded renderer security surface", async
   assert.match(preload, /updatePreferences\(patch\)/);
   assert.match(preload, /close\(\)/);
   assert.match(preload, /checkForUpdates\(\)/);
+  assert.match(preload, /syncGithubIssues\(\)/);
+  assert.match(preload, /configureGithubIssues\(repositories\)/);
   assert.match(preload, /openExternal\(url\)/);
   assert.doesNotMatch(preload, /exposeInMainWorld\([^\n]*ipcRenderer/);
 });
@@ -517,6 +578,8 @@ function createHarness(overrides = {}) {
         getStatus: overrides.getStatus ?? (async () => ({})),
         getContent: overrides.getContent ?? (async () => ({})),
         checkForUpdates: overrides.checkForUpdates ?? (async () => ({})),
+        syncGithubIssues: overrides.syncGithubIssues ?? (async () => ({})),
+        configureGithubIssues: overrides.configureGithubIssues ?? (async () => ({})),
         getSystemLanguages: overrides.getSystemLanguages ?? (() => []),
       });
     },

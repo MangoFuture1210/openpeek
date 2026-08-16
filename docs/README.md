@@ -14,6 +14,7 @@ materially improves installation, privacy, or product use.
 | Changes and compatibility | [Changelog](../CHANGELOG.md) | Version changes, verification, compatibility |
 | Build from source | [Community Build guide](build-from-source.md) | Contributors and third-party builders |
 | System architecture | [Architecture](architecture.md) | Cross-module behavior and invariants |
+| GitHub Issues local index | [CLI, storage, sync, and rate-limit contract](github-issues-local-index.md) | Agent users and maintainers |
 | MDX-lite reference | [Reference](mdx-lite-guide.md) | Syntax, allowlist, and renderer contract |
 | MDX-lite demo | [Demo](mdx-lite-components-demo.mdx) | Development and visual regression fixture |
 | Public User Guide Demo | [Runnable companion repository](https://github.com/openglance/openglance-example-knowledge-base) | User-facing first-run and main-feature demos |

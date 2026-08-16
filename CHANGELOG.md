@@ -4,6 +4,14 @@ OpenGlance follows Semantic Versioning for its shared app version. Git tags iden
 official public artifacts, signatures, checksums, and platform availability are authoritative only on
 the [OpenGlance download page](https://gitleaf.mangofuture.com/download).
 
+## Unreleased
+
+### Added
+
+- Added an optional, read-only GitHub Issues local index for Agent and maintainer workflows, with an
+  explicit repository allowlist, offline SQLite full-text search, Issue-comment details, incremental
+  synchronization, live REST budget protection, structured global CLI output, and desktop scope/status controls.
+
 ## 3.0.5 — 2026-08-16 (internal release)
 
 ### Fixed

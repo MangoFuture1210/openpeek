@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-15
+last_updated: 2026-08-16
 ---
 
 # OpenGlance user guide
@@ -484,6 +484,13 @@ the update cache keeps at most one complete downloaded-but-uninstalled package.
 The same screen contains OpenGlance Help, supported file types, environment and repository status, and
 the complete keyboard-shortcut list. Open shortcuts directly with `Command+?` on macOS or `Ctrl+?` on
 Windows.
+
+When the optional GitHub Issues local index has a repository allowlist, **About & Status** also shows
+the Issue and indexed-comment counts, last successful snapshot, and latest failure for each repository.
+**Sync GitHub Issues** runs an explicit sequential sync; simply opening Settings never starts one. The
+same screen can replace the protected local allowlist with bounded `owner/name` entries; an environment-managed
+allowlist stays read-only. Repository content cannot expand the private GitHub scope. See the
+[GitHub Issues local index guide](github-issues-local-index.md).
 
 ## When to use another tool
 

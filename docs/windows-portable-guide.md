@@ -40,7 +40,7 @@ is retired. If Windows still has the old updater open, cleanup is retried on the
 
 ## Community Build
 
-From a checkout with Node.js 22 or newer:
+From a checkout with Node.js 22.13 or newer:
 
 ```powershell
 npm ci

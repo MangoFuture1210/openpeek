@@ -3,7 +3,7 @@ title: OpenGlance system architecture
 domain: ai
 type: architecture
 owner: maintainer
-last_updated: 2026-08-15
+last_updated: 2026-08-16
 source: openglance
 canonical: true
 ai_snippet: "[Architecture] OpenGlance | human desktop interface for shared context repositories | local HTTP service | Git worktrees | Preview Source Live | CodeMirror 6 | guarded Git sync"
@@ -22,6 +22,7 @@ user guide or an MDX-lite syntax reference.
 - Official publication: [Release process](release.md).
 - Hosted link metadata: [Hosted link handoff](hosted-links.md).
 - Usage analytics: [Usage analytics specification](app-usage-analytics-spec.md).
+- GitHub Issues read model: [GitHub Issues local index](github-issues-local-index.md).
 
 ## Product and data model
 
@@ -34,6 +35,10 @@ context. OpenGlance does not import documents into a separate database, CMS, con
 store. Images, attachments, code, and other repository files remain ordinary files. OpenGlance provides
 the human interface over that repository; AI agents, developers, and automation work with the same files
 directly.
+
+The optional GitHub Issues index is a separate, discardable read model of GitHub task data. It never
+copies repository files into the database, and GitHub—not Git—is authoritative for Issue state. This
+exception does not turn OpenGlance into a general context engine or task system.
 
 OpenGlance is optimized for three jobs:
 
@@ -100,12 +105,16 @@ The desktop app is the normal user entry point. It stores the selected repositor
 in Electron `userData`, restores the previous repository on later launches, and asks the user to choose
 again if a repository is missing or invalid.
 
-The CLI and browser entry points are development surfaces:
+The CLI browser-workbench entry point is a development surface:
 
 ```bash
 npm start -- /path/to/repository/README.md
 npm start -- /path/to/repository/README.md --no-open
 ```
+
+`openglance issues` is the standalone Agent and maintainer surface for the optional GitHub Issues read
+model. Its offline commands do not start or depend on the localhost document service. The desktop
+Settings center reads the same status and invokes the same explicit synchronization core.
 
 The service binds to `127.0.0.1:4317` by default. If that port is occupied it may choose a later local
 port. It must never expose repository reads, edits, local paths, or Git actions to the LAN. The browser
@@ -163,7 +172,9 @@ document. No write path may bypass this boundary.
 ### External command contract
 
 Git is required to open and operate on a repository. GitHub CLI is an optional environment-readiness
-check: remote operations use Git's configured credentials and remain available when `gh` is absent.
+check for document/Git workflows: those remote operations use Git's configured credentials and remain
+available when `gh` is absent. The optional GitHub Issues synchronizer explicitly requires authenticated
+`gh`; its already-cached search, show, and status commands remain available without `gh` or a network.
 Operating-system launch helpers are action-specific dependencies rather than prerequisites for opening a
 repository. Every external-command caller classifies both process execution and output:
 
@@ -188,6 +199,27 @@ unchanged rather than blocking startup.
 Nonzero exit codes are normal only when a specific command contract declares them so, such as
 `merge-base --is-ancestor` returning 1 for “not an ancestor.” Optional information may degrade only at
 an explicit call site; for example, a failed share-title preview can fall back to the filename.
+
+## GitHub Issues local read model
+
+GitHub Issues support has four layers with one-way dependencies:
+
+1. `github-issues-store.mjs` owns schema initialization, account/repository isolation, FTS queries, WAL transactions, sync health, and duplicate-writer leases.
+2. `github-issues-sync.mjs` owns local Git remote detection, active `gh` identity, rate-budget checks, GitHub REST pagination, response validation, and overlapped incremental cursors.
+3. `github-issues-service.mjs` owns sequential multi-repository orchestration and per-repository failure isolation.
+4. `github-issues-cli.mjs` and the desktop Settings center adapt the same core into Agent JSON, human CLI output, and aggregate UI status.
+
+Repository scope comes only from a protected local configuration file or the explicit environment allowlist. Public source and renderer code contain no private repository defaults. A renderer can display aggregate status, request a sync, or replace the local scope with at most 50 syntactically bounded `owner/name` values through restricted IPC. It cannot select a database/configuration path, invoke a GitHub command, access a token, submit an arbitrary query to the privileged process, or modify an environment-managed scope.
+
+The database is per user/device and outside every Git repository. Rows are keyed by GitHub host, active login, and repository. Issue and comment FTS use the SQLite trigram tokenizer; terms shorter than three characters use an escaped relational fallback. Search results carry coverage and freshness because a missing or stale cache row cannot assert remote absence.
+
+Synchronization is the only network path. The first sync and an explicit full sync fetch all Issue and repository-comment pages; later syncs send a five-minute-overlapped `since` cursor to both endpoints. GitHub's shared Issue endpoints also return pull-request records, which are counted as fetched API pages and discarded before the transaction commits. Full sync reconciles deletions; incremental sync cannot infer deletions without tombstones.
+
+Before every repository, the synchronizer reads GitHub's live REST core budget and reserves 20% of the returned limit. It estimates the next repository's cost from measured page counts, uses a conservative 100-request estimate for a first full sync, and starts only when both the estimate and reserve remain available. Configured repositories run sequentially; a budget or rate-limit stop defers the rest of the batch without more GitHub calls. Transient failures keep the previous snapshot, while a response that confirms repository access was revoked purges that account/repository scope.
+
+A 30-minute host/account coordinator lease, renewed before every repository, ensures only one App or Agent process owns a multi-repository sync on one device; a 15-minute repository lease remains as defense in depth. Readers continue using WAL throughout. Both custom configuration and database paths are rejected when their canonical location is inside any Git worktree, preventing private Issue data from entering Git by path override.
+
+`gh` is required only for authentication and synchronization. The token remains inside GitHub CLI credential handling. Offline search, show, status, Settings rendering, and database startup never request or persist the token. Issue creation, edits, comments, assignment, Project mutation, and every other GitHub write remain outside this module.
 
 ## Workbench state and navigation
 
@@ -744,9 +776,12 @@ The following files are key seams, not an exhaustive module inventory:
 | `src/desktop/user-data.mjs` | Shared human Profile and explicit smoke isolation |
 | `src/desktop/server.mjs` | Local service launch and port fallback |
 | `src/cli.mjs` | CLI discovery, service reuse, and launch |
+| `src/server/github-issues-cli.mjs` | Agent-readable and human-readable GitHub Issues command surface |
 | `src/server/index.mjs` | Local HTTP API, document IO, rendering, Git actions |
 | `src/server/repositories.mjs`, `src/server/git-worktrees.mjs` | Repository identity, worktree discovery, stable IDs |
 | `src/server/external-command.mjs` | Command execution and failure classification |
+| `src/server/github-issues-store.mjs`, `src/server/github-issues-sync.mjs` | SQLite/FTS read model and rate-budgeted GitHub synchronization |
+| `src/server/github-issues-repositories.mjs`, `src/server/github-issues-service.mjs` | Protected local scope and multi-repository orchestration |
 | `src/server/hosted-links.mjs`, `src/server/openglance-open-link.mjs` | Hosted HTTPS link validation and generation |
 | `src/desktop/deep-link.mjs` | Local desktop protocol generation and parsing |
 | `src/server/git-share-publish.mjs`, `src/server/git-share-open.mjs` | Sender publication and receiver safety |
@@ -773,13 +808,15 @@ OpenGlance does not currently provide:
 - a full BI, mapping, graph, linked-filter, or dashboard system; dataset views are deliberately bounded;
 - the Obsidian plugin ecosystem;
 - an embedded AI chat or agent runtime;
-- a context retrieval engine, semantic index, vector database, or MCP service;
+- a general repository context retrieval engine, semantic/vector index, or MCP service; the bounded
+  GitHub Issues read model does not index repository files;
 - attribution or a formal diff-approval workflow for agent changes;
 - a replacement for Git branching, code review, or conflict resolution.
 
 ## Architecture invariants
 
 - The selected Git repository remains the shared context source of truth.
+- GitHub remains authoritative for Issue state; the local Issue database is a discardable, freshness-labeled read model.
 - The local editing service remains bound to localhost.
 - Live never introduces a second rich-text storage model.
 - MDX-lite remains allowlisted and non-executable.

@@ -37,6 +37,8 @@ const USER_PREFERENCE_KEYS = new Set([
   "gitRemoteCheckIntervalMinutes",
 ]);
 const EXTERNAL_PROTOCOLS = new Set(["https:", "http:", "mailto:"]);
+const MAX_GITHUB_ISSUE_REPOSITORIES = 50;
+const GITHUB_REPOSITORY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,38})\/[a-z0-9._-]{1,100}$/iu;
 const DEFAULT_PAGE_PATH = path.join(import.meta.dirname, "settings", "index.html");
 const DEFAULT_PRELOAD_PATH = path.join(import.meta.dirname, "settings", "preload.cjs");
 
@@ -75,6 +77,13 @@ export function normalizeSettingsAction(value) {
   if (action.type === "check-for-updates") {
     return { type: "check-for-updates" };
   }
+  if (action.type === "sync-github-issues") {
+    return { type: "sync-github-issues" };
+  }
+  if (action.type === "configure-github-issues") {
+    const repositories = normalizeGithubIssueRepositoryActionList(action.repositories);
+    return repositories ? { type: "configure-github-issues", repositories } : null;
+  }
   if (action.type === "open-external") {
     const url = normalizeExternalUrl(action.url);
     return url ? { type: "open-external", url } : null;
@@ -105,6 +114,8 @@ export function createSettingsCenterController({
   getSystemDark = () => false,
   getSystemLanguages = () => [],
   checkForUpdates = async () => ({}),
+  syncGithubIssues = async () => ({}),
+  configureGithubIssues = async () => ({}),
 } = {}) {
   requireControllerDependency(mainWindow, "mainWindow");
   requireControllerDependency(WebContentsView, "WebContentsView");
@@ -372,6 +383,16 @@ export function createSettingsCenterController({
           result: await checkForUpdates(),
         };
       }
+      if (action.type === "sync-github-issues") {
+        const result = await syncGithubIssues();
+        await refresh();
+        return { ok: true, result };
+      }
+      if (action.type === "configure-github-issues") {
+        const result = await configureGithubIssues(action.repositories);
+        await refresh();
+        return { ok: true, result };
+      }
       await shell.openExternal(action.url);
       return { ok: true };
     });
@@ -418,6 +439,26 @@ export function createSettingsCenterController({
       return view?.webContents ?? null;
     },
   };
+}
+
+function normalizeGithubIssueRepositoryActionList(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_GITHUB_ISSUE_REPOSITORIES) {
+    return null;
+  }
+  const repositories = [];
+  for (const candidate of value) {
+    if (typeof candidate !== "string") {
+      return null;
+    }
+    const repository = candidate.trim().replace(/\.git$/iu, "").toLowerCase();
+    if (!GITHUB_REPOSITORY_PATTERN.test(repository)) {
+      return null;
+    }
+    if (!repositories.includes(repository)) {
+      repositories.push(repository);
+    }
+  }
+  return repositories.length > 0 ? repositories : null;
 }
 
 export const createDesktopSettingsCenter = createSettingsCenterController;

@@ -2,6 +2,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -15,6 +16,7 @@ import { findRepoRoot, resolveOpenablePath } from "./server/paths.mjs";
 import { createRepositoryInfo } from "./server/repositories.mjs";
 import { createPreviewServer } from "./server/index.mjs";
 import { createToolVersionMonitor } from "./tool-version.mjs";
+import { runGithubIssuesCli } from "./server/github-issues-cli.mjs";
 
 const DEFAULT_PORT = 4317;
 const HEALTH_CHECK_TIMEOUT_MS = 500;
@@ -33,6 +35,14 @@ const LEGACY_SERVER_RECORD_DIRS = [
 const execFileAsync = promisify(execFile);
 
 export async function runCli(args = process.argv.slice(2)) {
+  if (args[0] === "issues") {
+    await runGithubIssuesCli(args.slice(1));
+    return;
+  }
+  if (["--help", "-h"].includes(args[0])) {
+    printUsage();
+    return;
+  }
   const options = parseArgs(args);
   const repoRoot = await findRepoRoot(process.cwd());
   const inputFile = options.file
@@ -639,18 +649,36 @@ function openBrowser(url) {
 }
 
 function printUsage() {
-  console.error(`Usage: openglance [path-to-doc.md] [--no-open]
+  console.log(`Usage: openglance [path-to-doc.md] [--no-open]
+       openglance issues <configure|sync|search|show|status> [options]
 
 Examples:
   openglance
   openglance docs/notes/example.md
   openglance docs/repo-structure.md --no-open
+  openglance issues sync
+  openglance issues search "network retry" --json
 
 The legacy git-leaf command remains available as a compatibility alias.
 `);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+export function isCliEntrypoint({
+  entrypoint = process.argv[1],
+  modulePath = fileURLToPath(import.meta.url),
+  resolveRealPath = realpathSync,
+} = {}) {
+  if (!entrypoint) {
+    return false;
+  }
+  try {
+    return resolveRealPath(entrypoint) === resolveRealPath(modulePath);
+  } catch {
+    return path.resolve(entrypoint) === path.resolve(modulePath);
+  }
+}
+
+if (isCliEntrypoint()) {
   runCli().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
